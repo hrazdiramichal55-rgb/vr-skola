@@ -21,6 +21,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SEKCE } from './sekce/seznam.js';
 import { vytvorTlacitko, vytvorPanel, pozadiPanelu } from './ui.js';
 
+const SKOLA = 'ZŠ a MŠ Ostrov u Macochy';
+
 // ---------- Základ ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -93,18 +95,21 @@ function ukazNabidku() {
   koren.add(mrizka);
 
   // nadpis
-  const nadpis = vytvorPanel(1.0, 0.26);
+  const nadpis = vytvorPanel(1.0, 0.32);
   pozadiPanelu(nadpis.ctx, nadpis.c.width, nadpis.c.height);
   nadpis.ctx.textBaseline = 'top';
   nadpis.ctx.fillStyle = '#ffd36b';
   nadpis.ctx.font = 'bold 84px system-ui, sans-serif';
-  nadpis.ctx.fillText('VR škola', 50, 30);
+  nadpis.ctx.fillText('VR škola', 50, 26);
+  nadpis.ctx.fillStyle = '#8fd0ff';
+  nadpis.ctx.font = 'bold 46px system-ui, sans-serif';
+  nadpis.ctx.fillText(SKOLA, 50, 128);
   nadpis.ctx.fillStyle = '#ffffff';
-  nadpis.ctx.font = '36px system-ui, sans-serif';
-  nadpis.ctx.fillText('Vyber, co chceš prozkoumat. Zpět se dostaneš', 50, 140);
-  nadpis.ctx.fillText('tlačítkem Menu na levém ovladači nebo tlačítkem Y / B.', 50, 186);
+  nadpis.ctx.font = '32px system-ui, sans-serif';
+  nadpis.ctx.fillText('Vyber, co chceš prozkoumat. Zpět se dostaneš tlačítkem', 50, 204);
+  nadpis.ctx.fillText('Menu na levém ovladači nebo tlačítkem Y / B.', 50, 246);
   nadpis.t.needsUpdate = true;
-  nadpis.mesh.position.set(0, 1.85, -1.4);
+  nadpis.mesh.position.set(0, 1.88, -1.4);
   nadpis.mesh.lookAt(0, 1.6, 0);
   koren.add(nadpis.mesh);
 
@@ -128,14 +133,14 @@ function ukazNabidku() {
   nastavKameru({ pozice: [0, 1.6, 0.4], cil: [0, 1.5, -1.4] });
   menuTlacitko.visible = false;
   htmlMenu.hidden = true;
-  htmlNapoveda.innerHTML = '<b>Hlavní nabídka</b><br>Klikni na sekci, kterou chceš otevřít.';
+  htmlNapoveda.innerHTML = `<b>VR škola · ${SKOLA}</b><br>Klikni na sekci, kterou chceš otevřít.`;
   history.replaceState(null, '', location.pathname);
 }
 
 htmlMenu.addEventListener('click', ukazNabidku);
 
 // ---------- Tlačítko Menu na levém ovladači ----------
-const menuTlacitko = vytvorTlacitko('Menu', '', 0.12, 0.05, ukazNabidku, { pismo: 110 });
+const menuTlacitko = vytvorTlacitko('Menu', '', 0.12, 0.05, ukazNabidku, { pismo: 110, naStred: true });
 menuTlacitko.position.set(0, 0.05, 0.07);
 menuTlacitko.rotation.x = -Math.PI / 4;     // natočené nahoru k obličeji
 menuTlacitko.visible = false;

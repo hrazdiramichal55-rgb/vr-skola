@@ -9,8 +9,14 @@
 // =====================================================================
 import vesmir from './vesmir.js';
 import chemie from './chemie.js';
+import fyzika from './fyzika.js';
+import unikovka from './unikovka.js';
+import kostkov from './kostkov.js';
 
 export const SEKCE = [
   vesmir,
   chemie,
+  fyzika,
+  unikovka,
+  kostkov,
 ];

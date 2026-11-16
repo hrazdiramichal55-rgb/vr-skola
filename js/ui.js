@@ -29,21 +29,26 @@ export function zalom(ctx, text, maxSirka) {
 export function hexCss(cislo) { return '#' + cislo.toString(16).padStart(6, '0'); }
 
 // Popisek, který se vždy natáčí k divákovi.
+//  sirka = šířka v metrech pro krátký text; delší text se úměrně rozšíří.
 export function stitek(text, { sirka = 0.28, pismo = 40, vzdyViditelny = false } = {}) {
-  const { ctx, t } = canvasTextura(256, 64);
-  ctx.font = `bold ${pismo}px system-ui, sans-serif`;
+  const font = `bold ${pismo}px system-ui, sans-serif`;
+  const mereni = document.createElement('canvas').getContext('2d');
+  mereni.font = font;
+  const W = Math.max(256, Math.ceil(mereni.measureText(text).width) + 24);
+  const { ctx, t } = canvasTextura(W, 64);
+  ctx.font = font;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,.8)';
-  ctx.strokeText(text, 128, 32);
+  ctx.strokeText(text, W / 2, 32);
   ctx.fillStyle = '#fff';
-  ctx.fillText(text, 128, 32);
+  ctx.fillText(text, W / 2, 32);
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false, depthTest: !vzdyViditelny }));
-  s.scale.set(sirka, sirka / 4, 1);
+  s.scale.set(sirka * W / 256, sirka / 4, 1);
   return s;
 }
 
 // Tlačítko v prostoru. Na kliknutí / spoušť zavolá `akce`.
-export function vytvorTlacitko(text, podtext, sirka, vyska, akce, { pismo = 44, podpismo = 36, akcent = null } = {}) {
+export function vytvorTlacitko(text, podtext, sirka, vyska, akce, { pismo = 44, podpismo = 36, akcent = null, naStred = false } = {}) {
   const { c, ctx, t } = canvasTextura(512, Math.round(512 * vyska / sirka));
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(sirka, vyska), new THREE.MeshBasicMaterial({ map: t, transparent: true }));
   mesh.userData = { akce, hover: false, aktivni: false, text, podtext };
@@ -61,6 +66,8 @@ export function vytvorTlacitko(text, podtext, sirka, vyska, akce, { pismo = 44, 
     }
     ctx.fillStyle = '#ffffff';
     ctx.textBaseline = 'middle';
+    ctx.textAlign = naStred ? 'center' : 'left';
+    if (naStred) x = c.width / 2;
     ctx.font = `bold ${pismo}px system-ui, sans-serif`;
     const pt = mesh.userData.podtext;
     ctx.fillText(mesh.userData.text, x, c.height / 2 - (pt ? pismo * 0.45 : 0));
