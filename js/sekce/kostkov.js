@@ -1,25 +1,35 @@
 // =====================================================================
 //  SEKCE: Kostkov – kostičkový svět, který si žáci postaví sami
 //
-//  Dva režimy:
+//  Dva pohledy:
 //   • Stavebnice – celý svět je zmenšený na stole před hráčem.
 //     Funguje v brýlích i na PC. Klidný režim pro první zkoušky.
-//   • Uvnitř světa – hráč se zmenší a chodí po světě (jen v brýlích).
+//   • Uvnitř světa – hráč chodí po světě. Na PC jako počítačová hra
+//     (myš + WASD), v brýlích páčkami. Přepínač „Hraju na PC / ve VR“
+//     je na paletě; v nasazených brýlích se hraje vždy ve VR.
+//
+//  Hra má dvě varianty (přepíná se na paletě):
+//   • Přežití – batoh je na začátku prázdný. Spoušť se drží, dokud se blok
+//     nevytěží. Z kmene se vyrobí prkna, klacky a nástroje, krumpáčem pak
+//     kámen. Panel nahoře radí, co udělat dál. Tabulky TEZBA a RECEPTY níže.
+//   • Tvoření – všechny bloky bez omezení, těží se jedním stiskem.
 //
 //  Ovládání v brýlích:
-//   spoušť = vytěžit blok, boční tlačítko (grip) = položit blok,
+//   spoušť = těžit (v Přežití držet), boční tlačítko (grip) = položit blok,
 //   A / X = další / předchozí blok, paleta bloků je u levé ruky.
 //   Uvnitř světa: levá páčka chůze, pravá páčka do stran otáčení,
 //   pravá páčka nahoru skok. Na schod vysoký jeden blok se vyleze samo.
-//  Ovládání na PC (stavebnice):
-//   levé tlačítko = vytěžit, pravé = položit, 1–9 = výběr bloku,
-//   táhnutím myši se otáčí pohled.
+//  Ovládání na PC:
+//   stavebnice: levé tlačítko = těžit (v Přežití držet), pravé = položit,
+//   1–9 = výběr bloku, táhnutím myši se otáčí pohled.
+//   uvnitř světa: myš = rozhlížení, WASD = chůze, mezerník = skok, Shift = běh,
+//   E nebo Esc = pustit myš a klikat na paletu (batoh, výroba, zpět ke stolu).
 //
 //  Stavby se ukládají v prohlížeči (na každých brýlích zvlášť).
 //  Velikost světa, rychlost chůze nebo gravitaci lze změnit níže.
 // =====================================================================
 import * as THREE from 'three';
-import { vytvorTlacitko, vytvorPanel, pozadiPanelu } from '../ui.js';
+import { vytvorTlacitko, vytvorPanel, pozadiPanelu, zaobleny, stitek } from '../ui.js';
 
 const NX = 64, NZ = 64, NY = 32, CH = 16, NCX = NX / CH, NCZ = NZ / CH, MORE = 9;
 const KLIC = 'vr-skola-kostkov-v1';
@@ -44,6 +54,46 @@ const BL = {
   [PODLOZI]: { n: 'Podloží', t: [12, 12, 12], pevny: 1, barva: '#444' },
 };
 const PALETA = [TRAVA, HLINA, KAMEN, PISEK, KMEN, LISTI, PRKNA, CIHLY, SKLO];
+
+// ---------- režim Přežití: nástroje, těžba a výroba ----------
+// Na začátku je batoh prázdný. Rukou jde vytěžit dřevo, z něj se vyrobí
+// prkna, klacky a dřevěné nástroje, krumpáčem pak kámen a kamenné nástroje.
+const KLACKY = 'klacky';
+const NASTROJE = {   // sila = kolikrát rychleji než ruka
+  drevKrumpac: { n: 'Dřevěný krumpáč', druh: 'krumpac', sila: 2.5 },
+  drevSekera:  { n: 'Dřevěná sekera',  druh: 'sekera',  sila: 2.5 },
+  drevLopata:  { n: 'Dřevěná lopata',  druh: 'lopata',  sila: 2.5 },
+  kamKrumpac:  { n: 'Kamenný krumpáč', druh: 'krumpac', sila: 5 },
+  kamSekera:   { n: 'Kamenná sekera',  druh: 'sekera',  sila: 5 },
+  kamLopata:   { n: 'Kamenná lopata',  druh: 'lopata',  sila: 5 },
+};
+// tvrdost = kolik sekund trvá rukou, nastroj = co těžbu zrychlí,
+// nutny = bez nástroje to nejde, dava = co padne do batohu, sance = [předmět, pravděpodobnost]
+const TEZBA = {
+  [TRAVA]: { tvrdost: 0.9, nastroj: 'lopata', dava: HLINA },
+  [HLINA]: { tvrdost: 0.8, nastroj: 'lopata', dava: HLINA },
+  [PISEK]: { tvrdost: 0.8, nastroj: 'lopata', dava: PISEK },
+  [KMEN]:  { tvrdost: 3,   nastroj: 'sekera', dava: KMEN },
+  [PRKNA]: { tvrdost: 2.5, nastroj: 'sekera', dava: PRKNA },
+  [LISTI]: { tvrdost: 0.35, dava: null, sance: [KLACKY, 0.25] },
+  [KAMEN]: { tvrdost: 6,   nastroj: 'krumpac', nutny: true, dava: KAMEN },
+  [CIHLY]: { tvrdost: 7,   nastroj: 'krumpac', nutny: true, dava: CIHLY },
+  [SKLO]:  { tvrdost: 0.5, dava: null },
+};
+const RECEPTY = [
+  { n: 'Prkna',         dava: [PRKNA, 4],        potreba: [[KMEN, 1]] },
+  { n: 'Klacky',        dava: [KLACKY, 4],       potreba: [[PRKNA, 2]] },
+  { n: 'Dřev. krumpáč', dava: ['drevKrumpac', 1], potreba: [[PRKNA, 3], [KLACKY, 2]] },
+  { n: 'Dřev. sekera',  dava: ['drevSekera', 1],  potreba: [[PRKNA, 3], [KLACKY, 2]] },
+  { n: 'Dřev. lopata',  dava: ['drevLopata', 1],  potreba: [[PRKNA, 1], [KLACKY, 2]] },
+  { n: 'Kam. krumpáč',  dava: ['kamKrumpac', 1],  potreba: [[KAMEN, 3], [KLACKY, 2]] },
+  { n: 'Kam. sekera',   dava: ['kamSekera', 1],   potreba: [[KAMEN, 3], [KLACKY, 2]] },
+  { n: 'Kam. lopata',   dava: ['kamLopata', 1],   potreba: [[KAMEN, 1], [KLACKY, 2]] },
+];
+const PORADI_BATOHU = [KMEN, PRKNA, KLACKY, HLINA, PISEK, KAMEN, CIHLY, LISTI, SKLO];
+const nazevPredmetu = (id) => id === KLACKY ? 'Klacky' : NASTROJE[id]?.n || BL[id]?.n || '?';
+const KRATCE = { [KMEN]: 'kmen', [PRKNA]: 'prkna', [KLACKY]: 'klacky', [KAMEN]: 'kameny' };
+const KRATCE1 = { [KMEN]: 'kmen', [PRKNA]: 'prkno', [KLACKY]: 'klacek', [KAMEN]: 'kámen' };
 
 // ---------- náhoda a šum ----------
 function hash(x, z, s) {
@@ -107,7 +157,7 @@ export default {
   nazev: 'Kostkov',
   popis: 'Postav si vlastní svět',
   barva: '#f2b544',
-  napovedaPC: 'Kostičkový svět na stole. Levým tlačítkem blok vytěžíš, pravým položíš, klávesami 1–9 nebo v paletě vlevo vybereš blok. Táhnutím myši otáčíš pohled. Do světa se dá vstoupit jen v brýlích.',
+  napovedaPC: 'Kostičkový svět na stole. Na panelu vpravo přepneš, jestli hraješ na PC, nebo ve VR. Na PC klikni na „Vstoupit do světa“ a chodíš jako v počítačové hře (WASD, myš, E = batoh). Začínáš s prázdným batohem: podrž levé tlačítko na kmeni stromu a ve Výrobě si udělej prkna, klacky a nástroje.',
 
   spust(app) {
     const { scene, camera, renderer } = app;
@@ -123,15 +173,25 @@ export default {
     const setRaw = (x, y, z, id) => { if (uvnitr(x, y, z)) svetData[idx(x, y, z)] = id; };
 
     let seed = 1, zmeny = new Map();
+    let hra = 'preziti', batoh = {};              // hra: 'preziti' nebo 'tvoreni'
+    let ovladani = 'pc', ovladaniUlozene = false; // ovladani: 'pc' (myš a klávesnice) nebo 'vr' (brýle)
     try {
       const s = JSON.parse(localStorage.getItem(KLIC) || 'null');
-      if (s && s.seed) { seed = s.seed; zmeny = new Map(s.zmeny || []); } else seed = (Math.random() * 1e9) | 0;
+      if (s && s.seed) {
+        seed = s.seed; zmeny = new Map(s.zmeny || []);
+        if (s.hra) hra = s.hra;
+        if (s.batoh) batoh = s.batoh;
+        if (s.ovladani) { ovladani = s.ovladani; ovladaniUlozene = true; }
+      } else seed = (Math.random() * 1e9) | 0;
     } catch (e) { seed = (Math.random() * 1e9) | 0; }
+    const stav = () => JSON.stringify({ seed, zmeny: [...zmeny], hra, batoh, ovladani });
     let ulozCas = 0;
     const uloz = () => {
       clearTimeout(ulozCas);
-      ulozCas = setTimeout(() => { try { localStorage.setItem(KLIC, JSON.stringify({ seed, zmeny: [...zmeny] })); } catch (e) {} }, 300);
+      ulozCas = setTimeout(() => { try { localStorage.setItem(KLIC, stav()); } catch (e) {} }, 300);
     };
+    const pocet = (id) => batoh[id] || 0;
+    const pridej = (id, k) => { batoh[id] = pocet(id) + k; if (batoh[id] <= 0) delete batoh[id]; };
 
     function strom(x, y, z) {
       const h = 4 + Math.floor(hash(x, z, seed + 3) * 2);
@@ -227,6 +287,7 @@ export default {
       prestavOkoli(x, z); uloz();
     }
     generuj(); postavVse();
+    uloz();                                        // ať se svět při příštím otevření nezmění
 
     // podstavec a tráva pod stolem (jen ve stavebnici)
     const podstavec = new THREE.Mesh(
@@ -296,51 +357,246 @@ export default {
       H.pos.set(NX / 2 + .5, NY - 2, NZ / 2 + .5);
     }
 
-    // ---------- paleta bloků ----------
+    // ---------- paleta: batoh, výroba a tlačítka ----------
     const paleta = new THREE.Group();
-    let vybrany = 0;
-    const hlavicka = vytvorPanel(0.56, 0.08, 768);
-    pozadiPanelu(hlavicka.ctx, hlavicka.c.width, hlavicka.c.height);
-    hlavicka.ctx.fillStyle = '#ffd36b';
-    hlavicka.ctx.font = 'bold 60px system-ui, sans-serif';
-    hlavicka.ctx.textBaseline = 'middle';
-    hlavicka.ctx.fillText('Kostkov · vyber blok', 36, hlavicka.c.height / 2 + 2);
-    hlavicka.t.needsUpdate = true;
-    hlavicka.mesh.position.y = 0.22;
+    let pohled = 'batoh', vybranyPredmet = null;
+    let cas = 0, zprava = '', zpravaDobra = true, zpravaDo = 0;
+
+    const hlavicka = vytvorPanel(0.56, 0.15, 768);
+    hlavicka.mesh.position.y = 0.27;
     paleta.add(hlavicka.mesh);
 
-    const tlBloky = PALETA.map((id, i) => {
-      const b = vytvorTlacitko(BL[id].n, '', 0.17, 0.06, () => vyberBlok(i), { pismo: 92, akcent: BL[id].barva });
-      b.position.set((i % 3 - 1) * 0.185, 0.13 - Math.floor(i / 3) * 0.07, 0);
+    function dalsiUkol() {
+      const drz = renderer.xr.isPresenting ? 'drž spoušť' : 'drž levé tlačítko';
+      if (!pocet('drevKrumpac')) {
+        if (!pocet(KMEN) && pocet(PRKNA) < 3 && !(pocet(PRKNA) >= 2 && pocet(KLACKY) < 2))
+          return `Úkol 1: Najdi strom, ${drz} na kmeni a vytěž dřevo.`;
+        if (pocet(KLACKY) < 2) return pocet(PRKNA) >= 2 ? 'Úkol 3: Ve Výrobě udělej z prken klacky.' : 'Úkol 2: Otevři Výrobu a udělej z kmene prkna.';
+        if (pocet(PRKNA) < 3) return 'Úkol 2: Otevři Výrobu a udělej z kmene prkna.';
+        return 'Úkol 4: Vyrob si dřevěný krumpáč.';
+      }
+      if (!pocet('kamKrumpac')) {
+        if (pocet(KAMEN) < 3) return 'Úkol 5: Krumpáčem vytěž 3 kameny (jsou pod hlínou).';
+        if (pocet(KLACKY) < 2) return 'Úkol 6: Udělej klacky a pak kamenný krumpáč.';
+        return 'Úkol 6: Vyrob si kamenný krumpáč.';
+      }
+      return 'Výborně! Vyrob si sekeru a lopatu a stav, co tě napadne.';
+    }
+    function kresliHlavicku() {
+      const { c, ctx, t } = hlavicka;
+      pozadiPanelu(ctx, c.width, c.height);
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#ffd36b';
+      ctx.font = 'bold 46px system-ui, sans-serif';
+      ctx.fillText(hra === 'tvoreni' ? 'Kostkov · Tvoření' : pohled === 'vyroba' ? 'Kostkov · Výroba' : 'Kostkov · Batoh', 30, 20);
+      ctx.font = '30px system-ui, sans-serif';
+      ctx.fillStyle = zprava ? (zpravaDobra ? '#7dffb0' : '#ff9f80') : '#ffffff';
+      ctx.fillText(zprava || (hra === 'tvoreni' ? 'Všechny bloky bez omezení, těží se jedním stiskem.' : dalsiUkol()), 30, 84, c.width - 60);
+      if (hra === 'preziti') {
+        const mam = Object.keys(NASTROJE).filter((k) => pocet(k)).map((k) => NASTROJE[k].n.toLowerCase());
+        ctx.fillStyle = '#9fd4ff';
+        ctx.font = '28px system-ui, sans-serif';
+        ctx.fillText('Nástroje: ' + (mam.join(', ') || 'jen ruce'), 30, 136, c.width - 60);
+      }
+      t.needsUpdate = true;
+    }
+    function ukazZpravu(text, dobra) {
+      zprava = text; zpravaDobra = dobra; zpravaDo = cas + 2.5;
+      kresliHlavicku();
+    }
+
+    // tlačítko slotu, které jde přepisovat (text, podtext, barva, vypnuto)
+    function slot(sirka, vyska) {
+      const W = 512, V = Math.round(512 * vyska / sirka);
+      const c = document.createElement('canvas'); c.width = W; c.height = V;
+      const ctx = c.getContext('2d'), t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(sirka, vyska), new THREE.MeshBasicMaterial({ map: t, transparent: true }));
+      mesh.userData = { akce: () => mesh.userData.pri?.(), hover: false, aktivni: false, text: '', podtext: '', barva: null, vypnuto: false };
+      mesh.userData.kresli = () => {
+        const u = mesh.userData;
+        ctx.clearRect(0, 0, W, V);
+        ctx.globalAlpha = u.vypnuto ? 0.45 : 1;
+        zaobleny(ctx, 4, 4, W - 8, V - 8, 22,
+          u.aktivni ? '#2f6fd6' : u.hover && !u.vypnuto ? '#2a4470' : '#1c2c4a',
+          u.aktivni ? '#bfe0ff' : u.hover && !u.vypnuto ? '#8fc3ff' : '#3d5a88', 5);
+        let x = 28;
+        if (u.barva) { ctx.fillStyle = u.barva; ctx.beginPath(); ctx.roundRect(22, 22, 14, V - 44, 7); ctx.fill(); x = 56; }
+        ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+        ctx.font = `bold ${u.podtext ? 60 : 72}px system-ui, sans-serif`;
+        ctx.fillText(u.text, x, V / 2 - (u.podtext ? 26 : 0), W - x - 20);
+        if (u.podtext) {
+          ctx.fillStyle = '#9fd4ff'; ctx.font = '40px system-ui, sans-serif';
+          ctx.fillText(u.podtext, x, V / 2 + 36, W - x - 20);
+        }
+        ctx.globalAlpha = 1;
+        t.needsUpdate = true;
+      };
+      mesh.userData.kresli();
+      return mesh;
+    }
+
+    const mrizka = Array.from({ length: 9 }, (_, i) => {
+      const b = slot(0.17, 0.06);
+      b.position.set((i % 3 - 1) * 0.185, 0.155 - Math.floor(i / 3) * 0.07, 0);
       paleta.add(b);
       return b;
     });
-    function vyberBlok(i) {
-      vybrany = (i + PALETA.length) % PALETA.length;
-      tlBloky.forEach((b, k) => { b.userData.aktivni = k === vybrany; b.userData.kresli(); });
+
+    const polozitelne = () => hra === 'tvoreni' ? PALETA : PORADI_BATOHU.filter((id) => BL[id] && pocet(id) > 0);
+    function vyber(id) { vybranyPredmet = id; prekresli(); }
+    function posunVyber(o) {
+      const s = polozitelne(); if (!s.length) return;
+      const i = s.indexOf(vybranyPredmet);
+      vyber(s[(i + o + s.length) % s.length]);
     }
+    const lzeVyrobit = (r) => r.potreba.every(([id, k]) => pocet(id) >= k);
+    function vyrob(r) {
+      if (NASTROJE[r.dava[0]] && pocet(r.dava[0])) return;
+      if (!lzeVyrobit(r)) { ukazZpravu('Na ' + r.n.toLowerCase() + ' ti chybí suroviny.', false); return; }
+      for (const [id, k] of r.potreba) pridej(id, -k);
+      pridej(r.dava[0], r.dava[1]);
+      if (vybranyPredmet === null && BL[r.dava[0]]) vybranyPredmet = r.dava[0];
+      ukazZpravu('Vyrobeno: ' + r.n + (r.dava[1] > 1 ? ' ×' + r.dava[1] : ''), true);
+      prekresli(); uloz();
+    }
+
+    function prekresli() {
+      let polozky;
+      if (hra === 'tvoreni') {
+        polozky = PALETA.map((id) => ({ text: BL[id].n, barva: BL[id].barva, pri: () => vyber(id), aktivni: vybranyPredmet === id }));
+      } else if (pohled === 'batoh') {
+        const mam = PORADI_BATOHU.filter((id) => pocet(id) > 0);
+        polozky = mam.length
+          ? mam.map((id) => ({
+              text: nazevPredmetu(id), podtext: '× ' + pocet(id) + (BL[id] ? '' : '  (na výrobu)'),
+              barva: BL[id]?.barva || '#b08a50', pri: BL[id] ? () => vyber(id) : null, aktivni: vybranyPredmet === id }))
+          : [{ text: 'Batoh je prázdný', podtext: 'vytěž dřevo ze stromu', vypnuto: true }];
+      } else {
+        polozky = RECEPTY.map((r) => {
+          const uzMa = NASTROJE[r.dava[0]] && pocet(r.dava[0]) > 0;
+          return {
+            text: r.n + (r.dava[1] > 1 ? ' ×' + r.dava[1] : ''),
+            podtext: uzMa ? 'už máš' : r.potreba.map(([id, k]) => k + ' ' + (k === 1 ? KRATCE1 : KRATCE)[id]).join(' + '),
+            barva: NASTROJE[r.dava[0]] ? '#f2b544' : '#b08a50', vypnuto: uzMa || !lzeVyrobit(r), pri: () => vyrob(r) };
+        });
+      }
+      mrizka.forEach((b, i) => {
+        const p = polozky[i];
+        b.visible = !!p;
+        if (!p) return;
+        Object.assign(b.userData, { text: p.text, podtext: p.podtext || '', barva: p.barva || null, vypnuto: !!p.vypnuto, aktivni: !!p.aktivni, pri: p.pri || null });
+        b.userData.kresli();
+      });
+      tlVyroba.visible = hra === 'preziti';
+      tlVyroba.userData.text = pohled === 'vyroba' ? 'Zpět do batohu' : 'Výroba nástrojů';
+      tlVyroba.userData.kresli();
+      tlHra.userData.text = hra === 'preziti' ? 'Přežití' : 'Tvoření';
+      tlHra.userData.kresli();
+      tlOvladani.userData.text = ovladani === 'pc' ? 'Hraju na PC' : 'Hraju ve VR';
+      tlOvladani.userData.kresli();
+      popisRezimu();
+      kresliHlavicku();
+    }
+
+    const tlVyroba = vytvorTlacitko('Výroba nástrojů', '', 0.54, 0.06, () => {
+      pohled = pohled === 'vyroba' ? 'batoh' : 'vyroba';
+      prekresli();
+    }, { pismo: 38, naStred: true });
+    tlVyroba.position.set(0, -0.06, 0);
     const tlRezim = vytvorTlacitko('', '', 0.54, 0.1, () => {
-      if (rezim === 'stul') { if (renderer.xr.isPresenting) vstup(); }
-      else nastavRezim('stul');
+      if (rezim === 'uvnitr') { nastavRezim('stul'); return; }
+      if (renderer.xr.isPresenting || ovladani === 'pc') vstup();
+      else ukazZpravu('Nasaď si brýle a dole stiskni ENTER VR.', false);
     }, { pismo: 34, podpismo: 22, akcent: '#f2b544' });
-    tlRezim.position.set(0, -0.11, 0);
+    tlRezim.position.set(0, -0.145, 0);
+    // přepínač PC / VR (v brýlích je vždy VR)
+    const tlOvladani = vytvorTlacitko('', '', 0.17, 0.06, () => {
+      if (renderer.xr.isPresenting) { ukazZpravu('V brýlích se hraje vždy ve VR.', false); return; }
+      ovladani = ovladani === 'pc' ? 'vr' : 'pc';
+      ovladaniUlozene = true;
+      if (rezim === 'uvnitr') nastavRezim('stul');
+      ukazZpravu(ovladani === 'pc' ? 'Hraješ na PC: myš a klávesnice.' : 'Hraješ ve VR: nasaď brýle a stiskni ENTER VR.', true);
+      prekresli(); uloz();
+    }, { pismo: 60, naStred: true });
+    tlOvladani.position.set(-0.185, -0.235, 0);
+    const tlHra = vytvorTlacitko('', '', 0.17, 0.06, () => {
+      hra = hra === 'preziti' ? 'tvoreni' : 'preziti';
+      pohled = 'batoh';
+      vybranyPredmet = polozitelne()[0] ?? null;
+      prekresli(); uloz();
+    }, { pismo: 60, naStred: true });
+    tlHra.position.set(0, -0.235, 0);
     let potvrzeni = false;
-    const tlNovy = vytvorTlacitko('Nový svět', '', 0.54, 0.06, () => {
-      if (!potvrzeni) { potvrzeni = true; tlNovy.userData.text = 'Opravdu? Stavby se smažou'; tlNovy.userData.kresli(); return; }
+    const tlNovy = vytvorTlacitko('Nový svět', '', 0.17, 0.06, () => {
+      if (!potvrzeni) { potvrzeni = true; tlNovy.userData.text = 'Smazat?'; tlNovy.userData.kresli(); return; }
       potvrzeni = false; tlNovy.userData.text = 'Nový svět'; tlNovy.userData.kresli();
-      seed = (Math.random() * 1e9) | 0; zmeny = new Map();
-      generuj(); postavVse(); uloz();
+      seed = (Math.random() * 1e9) | 0; zmeny = new Map(); batoh = {};
+      generuj(); postavVse();
+      vybranyPredmet = polozitelne()[0] ?? null;
+      prekresli(); uloz();
       if (rezim === 'uvnitr') { najdiZem(NX / 2, NZ / 2); H.vel.set(0, 0, 0); }
-    }, { pismo: 30, naStred: true });
-    tlNovy.position.set(0, -0.205, 0);
-    paleta.add(tlRezim, tlNovy);
-    const tlacitkaPalety = [...tlBloky, tlRezim, tlNovy];
+    }, { pismo: 60, naStred: true });
+    tlNovy.position.set(0.185, -0.235, 0);
+    paleta.add(tlVyroba, tlRezim, tlOvladani, tlHra, tlNovy);
+    const tlacitkaPalety = [...mrizka, tlVyroba, tlRezim, tlOvladani, tlHra, tlNovy];
     koren.add(paleta);
+
+    // ---------- těžba držením spouště ----------
+    let tezba = { klic: null, postup: 0 }, bzuceni = 0;
+    const prasklina = new THREE.Mesh(new THREE.BoxGeometry(1.02, 1.02, 1.02),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
+    prasklina.visible = false; mapa.add(prasklina);
+    const letajici = [];
+    const vibruj = (gp, sila, ms) => { try { gp?.hapticActuators?.[0]?.pulse(sila, ms); } catch (e) {} };
+
+    function casTezby(id) {
+      const t = TEZBA[id]; if (!t) return null;
+      let sila = 1, nastroj = null;
+      if (t.nastroj) for (const [k, n] of Object.entries(NASTROJE))
+        if (n.druh === t.nastroj && pocet(k) && n.sila > sila) { sila = n.sila; nastroj = n.n; }
+      if (t.nutny && !nastroj) return { nelze: true };
+      return { cas: t.tvrdost / sila, nastroj };
+    }
+    function zrusTezbu() { tezba.klic = null; tezba.postup = 0; }
+    function tez(h, dt, gp) {
+      if (!h) { zrusTezbu(); return; }
+      const klic = h.x + ',' + h.y + ',' + h.z;
+      if (tezba.klic !== klic) {
+        tezba = { klic, x: h.x, y: h.y, z: h.z, postup: 0, info: casTezby(h.id) };
+        if (tezba.info?.nelze) ukazZpravu(BL[h.id].n + ' jde vytěžit jen krumpáčem.', false);
+      }
+      if (!tezba.info || tezba.info.nelze) return;
+      tezba.postup += dt / tezba.info.cas;
+      if ((bzuceni += dt) > 0.2) { bzuceni = 0; vibruj(gp, 0.25, 25); }
+      if (tezba.postup >= 1) { dokonciTezbu(h); vibruj(gp, 0.8, 70); zrusTezbu(); }
+    }
+    function leticiText(text, h) {
+      const naStole = rezim === 'stul';
+      const s = stitek(text, { sirka: naStole ? 0.12 : 0.4, pismo: 44, vzdyViditelny: true });
+      s.position.copy(mapa.localToWorld(new THREE.Vector3(h.x + .5, h.y + 1.2, h.z + .5)));
+      s.material.transparent = true;
+      koren.add(s);
+      letajici.push({ s, zivot: 0, rychlost: naStole ? 0.06 : 0.5 });
+    }
+    function dokonciTezbu(h) {
+      const t = TEZBA[h.id];
+      let ziskal = t.dava;
+      if (!ziskal && t.sance && Math.random() < t.sance[1]) ziskal = t.sance[0];
+      vytez(h);
+      if (ziskal) {
+        pridej(ziskal, 1);
+        if (vybranyPredmet === null && BL[ziskal]) vybranyPredmet = ziskal;
+        leticiText('+1 ' + nazevPredmetu(ziskal), h);
+      }
+      prekresli(); uloz();
+    }
 
     function popisRezimu() {
       if (rezim === 'stul') {
         tlRezim.userData.text = 'Vstoupit do světa';
-        tlRezim.userData.podtext = renderer.xr.isPresenting ? 'kam míříš paprskem, tam se objevíš' : 'funguje jen v brýlích';
+        tlRezim.userData.podtext = renderer.xr.isPresenting ? 'kam míříš paprskem, tam se objevíš'
+          : ovladani === 'pc' ? 'chůze s myší a klávesnicí, kam míříš, tam se objevíš' : 'nasaď brýle a stiskni ENTER VR';
       } else {
         tlRezim.userData.text = 'Zpět ke stavebnici';
         tlRezim.userData.podtext = 'svět se zase zmenší na stůl';
@@ -350,7 +606,9 @@ export default {
 
     // ---------- přepínání režimů ----------
     let mlha = null;
+    const PC_STUL = { pozice: [0.3, 1.75, 0.85], cil: [0.25, 0.95, -0.75] };   // pohled na stůl na PC
     function nastavRezim(r) {
+      const bylUvnitrPC = rezim === 'uvnitr' && !renderer.xr.isPresenting;
       rezim = r;
       if (r === 'stul') {
         svet.scale.setScalar(STUL.meritko);
@@ -359,16 +617,19 @@ export default {
         mapa.position.set(-NX / 2, 0, -NZ / 2);
         scene.fog = null;
         podstavec.visible = podlaha.visible = true;
-        if (paleta.parent !== koren) { paleta.parent?.remove(paleta); koren.add(paleta); }
-        paleta.scale.setScalar(1);
-        paleta.position.set(-0.75, 1.12, -0.45);
-        paleta.lookAt(0, 1.3, 0.3);
+        if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+        if (app.orbit) app.orbit.enabled = true;
+        if (bylUvnitrPC && app.orbit) {
+          camera.position.set(...PC_STUL.pozice);
+          app.orbit.target.set(...PC_STUL.cil);
+        }
       } else {
         svet.scale.setScalar(1);
         svet.position.set(0, 0, 0);
         podstavec.visible = podlaha.visible = false;
         mlha = mlha || new THREE.Fog(NEBE, 22, 56);
         scene.fog = mlha;
+        if (!renderer.xr.isPresenting && app.orbit) app.orbit.enabled = false;   // na PC řídí pohled myš
       }
       popisRezimu();
     }
@@ -377,8 +638,43 @@ export default {
       const cil = posledniMireni;
       najdiZem(cil ? cil.x : NX / 2, cil ? cil.z : NZ / 2);
       H.vel.set(0, 0, 0);
-      otoceni = 0;
+      otoceni = 0; pc.yaw = 0; pc.pitch = -0.25;
       nastavRezim('uvnitr');
+      if (!renderer.xr.isPresenting) zamkniMys();
+    }
+
+    // ---------- umístění palety: u stolu, u levé ruky (VR), v rohu obrazovky (PC) ----------
+    let kdePaleta = '';                               // první snímek paletu umístí
+    function hloubkaPalety(naObrazovce) {
+      paleta.traverse((o) => { if (o.material) o.material.depthTest = !naObrazovce; o.renderOrder = naObrazovce ? 1000 : 0; });
+    }
+    function umistiPaletu(vVR) {
+      if (rezim === 'uvnitr' && vVR) {                 // VR: paleta u levé ruky
+        if (kdePaleta === 'obrazovka') hloubkaPalety(false);
+        prichytPaletuKRuce();
+        kdePaleta = 'ruka';
+        return;
+      }
+      const kde = rezim === 'stul' ? 'stul' : 'obrazovka';
+      if (kde !== kdePaleta) {
+        paleta.parent?.remove(paleta);
+        hloubkaPalety(kde === 'obrazovka');
+        paleta.rotation.set(0, 0, 0);
+        if (kde === 'stul') {
+          koren.add(paleta);
+          paleta.scale.setScalar(1);
+          paleta.position.set(0.78, 1.18, -0.55);
+          paleta.lookAt(0, 1.3, 0.3);
+        } else {
+          camera.add(paleta);
+          paleta.scale.setScalar(0.36);
+        }
+        kdePaleta = kde;
+      }
+      if (kde === 'obrazovka') {                        // pravý horní roh, i když se změní velikost okna
+        const v = 0.6 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        paleta.position.set(v * camera.aspect - 0.11, v - 0.135, -0.6);
+      }
     }
 
     // ---------- míření na bloky ----------
@@ -436,29 +732,149 @@ export default {
         const p = H.pos;
         if (x + 1 > p.x - SIRKA && x < p.x + SIRKA && z + 1 > p.z - SIRKA && z < p.z + SIRKA && y + 1 > p.y && y < p.y + VYSKA) return;
       }
-      nastavBlok(x, y, z, PALETA[vybrany]);
+      const id = hra === 'tvoreni' ? (vybranyPredmet ?? PALETA[0]) : vybranyPredmet;
+      if (hra === 'preziti' && (!BL[id] || pocet(id) < 1)) { ukazZpravu('Nemáš co položit. Nejdřív něco vytěž.', false); return; }
+      nastavBlok(x, y, z, id);
+      if (hra === 'preziti') {
+        pridej(id, -1);
+        if (!pocet(id)) vybranyPredmet = polozitelne()[0] ?? null;
+        prekresli(); uloz();
+      }
     }
 
     // ---------- PC: myš a klávesy ----------
+    //  Stavebnice: kliká se myší přímo na bloky, táhnutím se otáčí pohled.
+    //  Uvnitř světa: myš je „zamčená“ (pohled z očí, míří se křížkem uprostřed),
+    //  E nebo Esc myš pustí, aby šlo klikat na paletu vpravo nahoře.
     const el = renderer.domElement;
-    let stisk = null, mysXY = null;
-    const priDolu = (e) => { stisk = { x: e.clientX, y: e.clientY, b: e.button }; };
+    const pc = { yaw: 0, pitch: 0, klavesy: {} };
+    const OKO = 1.5;                                          // výška očí nad nohama (bloky)
+    let stisk = null, mysXY = null, mysDrzi = false, zamceno = false;
+    // zamekNejde: prohlížeč nepovolil zamčení myši → rozhlíží se táhnutím, bloky se klikají myší
+    let zamekNejde = false;
+    const uvnitrPC = () => rezim === 'uvnitr' && !renderer.xr.isPresenting;
+    const paprsekStred = () => { mys.set(0, 0); rc.setFromCamera(mys, camera); return rc.ray; };
+    function zamkniMys() {
+      try { const p = el.requestPointerLock(); p?.catch?.(() => { zamekNejde = true; }); } catch (e) { zamekNejde = true; }
+      setTimeout(() => { if (!zamceno && uvnitrPC()) zamekNejde = true; }, 700);
+    }
+    const priDolu = (e) => {
+      if (uvnitrPC() && (zamceno || !zamekNejde)) {
+        stisk = null; mysDrzi = false;
+        if (!zamceno) {                                       // klik do světa = hrát dál
+          if (!mirisNaPaletu(paprsekMysi(e.clientX, e.clientY).clone())) zamkniMys();
+          return;
+        }
+        stisk = { b: e.button, zamceno: true };
+        mysDrzi = e.button === 0;
+        return;
+      }
+      stisk = { x: e.clientX, y: e.clientY, b: e.button };
+      mysXY = [e.clientX, e.clientY];
+      mysDrzi = e.button === 0;
+    };
     const priNahoru = (e) => {
+      mysDrzi = false;
       if (!stisk || renderer.xr.isPresenting) return;
-      const b = stisk.b, posun = Math.hypot(e.clientX - stisk.x, e.clientY - stisk.y);
+      const b = stisk.b;
+      if (stisk.zamceno) {
+        stisk = null;
+        const h = trefBlok(paprsekStred());
+        if (b === 2) poloz(h); else if (b === 0 && hra === 'tvoreni') vytez(h);
+        return;
+      }
+      const posun = Math.hypot(e.clientX - stisk.x, e.clientY - stisk.y);
       stisk = null;
       if (posun > 5) return;                                  // bylo to táhnutí
       const ray = paprsekMysi(e.clientX, e.clientY).clone();
       if (mirisNaPaletu(ray)) return;                         // tlačítka obslouží jádro
       const h = trefBlok(ray);
-      if (b === 2) poloz(h); else if (b === 0) vytez(h);
+      if (b === 2) poloz(h); else if (b === 0 && hra === 'tvoreni') vytez(h);
     };
-    const priPohybu = (e) => { mysXY = [e.clientX, e.clientY]; };
-    const priKlavese = (e) => { const n = +e.key; if (n >= 1 && n <= 9) vyberBlok(n - 1); };
+    const priPohybu = (e) => {
+      if (zamceno) {
+        pc.yaw -= e.movementX * 0.0022;
+        pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - e.movementY * 0.0022));
+        return;
+      }
+      if (uvnitrPC() && stisk && e.buttons) {                 // záložní ovládání: táhnutí = rozhlížení
+        pc.yaw -= e.movementX * 0.004;
+        pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - e.movementY * 0.004));
+      }
+      mysXY = [e.clientX, e.clientY];
+      if (stisk && Math.hypot(e.clientX - stisk.x, e.clientY - stisk.y) > 5) mysDrzi = false;   // otáčí pohledem
+    };
+    const priKlavese = (e) => {
+      pc.klavesy[e.code] = true;
+      const n = +e.key, s = polozitelne();
+      if (n >= 1 && n <= 9 && s[n - 1] !== undefined) vyber(s[n - 1]);
+      if (!uvnitrPC()) return;
+      if (e.code === 'Space') e.preventDefault();
+      if (e.code === 'KeyE') { if (zamceno) document.exitPointerLock(); else zamkniMys(); }
+    };
+    const priPusteniKlavesy = (e) => { pc.klavesy[e.code] = false; };
+    const priZtrateFokusu = () => { pc.klavesy = {}; mysDrzi = false; };
+    const priKolecku = (e) => { if (zamceno) posunVyber(e.deltaY > 0 ? 1 : -1); };
+    const priZamceni = () => {
+      zamceno = document.pointerLockElement === el;
+      if (!zamceno) { pc.klavesy = {}; mysDrzi = false; }
+    };
     el.addEventListener('pointerdown', priDolu);
     el.addEventListener('pointerup', priNahoru);
-    el.addEventListener('pointermove', priPohybu);
+    document.addEventListener('pointermove', priPohybu);
     window.addEventListener('keydown', priKlavese);
+    window.addEventListener('keyup', priPusteniKlavesy);
+    window.addEventListener('blur', priZtrateFokusu);
+    el.addEventListener('wheel', priKolecku, { passive: true });
+    document.addEventListener('pointerlockchange', priZamceni);
+
+    // zaměřovací křížek a nápověda dole (jen při chůzi na PC)
+    const hud = document.createElement('div');
+    hud.style.cssText = 'position:fixed;inset:0;pointer-events:none;font-family:system-ui,sans-serif';
+    hud.innerHTML =
+      '<div style="position:absolute;left:50%;top:50%;width:20px;height:20px;transform:translate(-50%,-50%)">' +
+      '<div style="position:absolute;left:9px;top:0;width:2px;height:20px;background:#fff;mix-blend-mode:difference"></div>' +
+      '<div style="position:absolute;top:9px;left:0;height:2px;width:20px;background:#fff;mix-blend-mode:difference"></div></div>' +
+      '<div data-rada style="position:absolute;left:50%;bottom:16px;transform:translateX(-50%);max-width:calc(100% - 32px);' +
+      'background:rgba(0,0,0,.65);color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;line-height:1.4;text-align:center"></div>';
+    hud.hidden = true;
+    document.body.appendChild(hud);
+    const hudRada = hud.querySelector('[data-rada]');
+    let hudText = '';
+    function aktualizujHud() {
+      const ukaz = uvnitrPC();
+      hud.hidden = !ukaz;
+      if (!ukaz) return;
+      const t = zamceno
+        ? 'WASD chůze · mezerník skok · Shift běh · ' + (hra === 'preziti' ? 'drž levé tlačítko = těžit' : 'levé tlačítko = těžit') +
+          ' · pravé = položit · 1–9 / kolečko = blok · E = batoh a výroba'
+        : zamekNejde
+          ? 'WASD chůze · mezerník skok · táhni myší = rozhlížení · ' + (hra === 'preziti' ? 'podrž levé tlačítko na bloku = těžit' : 'klikni na blok = těžit') +
+            ' · pravé = položit · panel vpravo nahoře = batoh a výroba'
+          : 'Klikni do světa a hraj dál. Batoh, výroba a návrat ke stavebnici jsou na panelu vpravo nahoře.';
+      if (t !== hudText) { hudText = t; hudRada.textContent = t; }
+    }
+
+    function ovladaniPC() {
+      const k = pc.klavesy, fx = -Math.sin(pc.yaw), fz = -Math.cos(pc.yaw);
+      let mx = 0, mz = 0;
+      const ovlada = zamceno || zamekNejde;
+      if (ovlada) {
+        if (k.KeyW || k.ArrowUp) { mx += fx; mz += fz; }
+        if (k.KeyS || k.ArrowDown) { mx -= fx; mz -= fz; }
+        if (k.KeyA || k.ArrowLeft) { mx += fz; mz -= fx; }
+        if (k.KeyD || k.ArrowRight) { mx -= fz; mz += fx; }
+      }
+      const delka = Math.hypot(mx, mz);
+      const rychlost = RYCHLOST * (k.ShiftLeft || k.ShiftRight ? 1.7 : 1);
+      if (delka) pohyb.set(mx / delka * rychlost, 0, mz / delka * rychlost); else pohyb.set(0, 0, 0);
+      if (ovlada && k.Space && H.zem) H.vel.y = SKOK;
+      // kamera stojí v očích hráče, orbit jen otočí pohled k bodu před ním
+      camera.position.set(0, OKO, 0);
+      const cp = Math.cos(pc.pitch);
+      app.orbit?.target.set(-Math.sin(pc.yaw) * cp, OKO + Math.sin(pc.pitch), -Math.cos(pc.yaw) * cp);
+      if (!app.orbit) camera.lookAt(-Math.sin(pc.yaw) * cp, OKO + Math.sin(pc.pitch), -Math.cos(pc.yaw) * cp);
+    }
 
     // ---------- VR: ztmavení okrajů při chůzi (proti nevolnosti) ----------
     const vinetaCanvas = document.createElement('canvas'); vinetaCanvas.width = vinetaCanvas.height = 256;
@@ -498,7 +914,7 @@ export default {
         const ruka = zdroj.handedness, osaX = gp.axes[2] || 0, osaY = gp.axes[3] || 0;
         const tlAX = !!gp.buttons[4]?.pressed;
         if (ruka === 'left') {
-          if (nove('X', tlAX)) vyberBlok(vybrany - 1);
+          if (nove('X', tlAX)) posunVyber(-1);
           if (rezim === 'uvnitr' && Math.hypot(osaX, osaY) > 0.15) {
             camera.getWorldDirection(vpred); vpred.y = 0; vpred.normalize();
             vpravo.set(-vpred.z, 0, vpred.x);
@@ -508,7 +924,7 @@ export default {
             jdu = Math.hypot(osaX, osaY);
           } else if (rezim === 'uvnitr') pohyb.set(0, 0, 0);
         } else if (ruka === 'right') {
-          if (nove('A', tlAX)) vyberBlok(vybrany + 1);
+          if (nove('A', tlAX)) posunVyber(1);
           const doStran = Math.abs(osaX) > 0.7 ? Math.sign(osaX) : 0;
           if (nove('otoc' + doStran, doStran !== 0) && doStran) {
             if (rezim === 'uvnitr') otoc(-doStran * OTOCENI);
@@ -552,16 +968,21 @@ export default {
     }
 
     nastavRezim('stul');
-    vyberBlok(0);
+    vybranyPredmet = polozitelne()[0] ?? null;
+    prekresli();
+    // na brýlích (prohlížeč umí VR) je výchozí ovládání VR, jinde PC
+    if (!ovladaniUlozene) navigator.xr?.isSessionSupported?.('immersive-vr').then((umi) => {
+      if (umi && !ovladaniUlozene) { ovladani = 'vr'; prekresli(); }
+    }).catch(() => {});
     let bylVR = false, vinetaSila = 0;
 
     return {
       koren,
-      cile: () => tlacitkaPalety,
-      kamera: { pozice: [0.3, 1.9, 0.9], cil: [0, 0.85, -0.9] },
+      cile: () => (zamceno ? [] : tlacitkaPalety),      // se zamčenou myší se paleta neklikne omylem
+      kamera: PC_STUL,
 
-      priPusteni(o) {                                   // spoušť puštěna = vytěžit
-        if (!o) return;                                 // PC obsluhují vlastní posluchače
+      priPusteni(o) {                                   // Tvoření: spoušť puštěna = vytěžit
+        if (!o || hra !== 'tvoreni') return;            // PC obsluhují vlastní posluchače
         const ray = paprsekOvladace(o).clone();
         if (mirisNaPaletu(ray)) return;
         vytez(trefBlok(ray));
@@ -574,17 +995,28 @@ export default {
       },
 
       aktualizuj(dt) {
+        cas += dt;
         const vVR = renderer.xr.isPresenting;
-        if (vVR !== bylVR) { bylVR = vVR; if (!vVR && rezim === 'uvnitr') nastavRezim('stul'); else popisRezimu(); }
+        if (vVR !== bylVR) {
+          bylVR = vVR;
+          if (vVR) {                                     // nasazené brýle = vždy ovládání VR
+            ovladani = 'vr';
+            if (document.pointerLockElement === el) document.exitPointerLock();
+            if (app.orbit) app.orbit.enabled = true;
+          } else if (rezim === 'uvnitr') nastavRezim('stul');
+          prekresli();
+        }
 
         let jdu = 0;
         if (vVR) jdu = ovladaniVR(dt);
         if (rezim === 'uvnitr') {
+          if (!vVR) ovladaniPC();
           fyzika(dt);
-          prichytPaletuKRuce();
           svet.rotation.y = otoceni;
           mapa.position.set(-H.pos.x, -H.pos.y, -H.pos.z);
         }
+        umistiPaletu(vVR);
+        aktualizujHud();
 
         // ztmavení okrajů jen při chůzi v brýlích
         const cil = vVR && rezim === 'uvnitr' ? Math.min(0.85, jdu * 0.85) : 0;
@@ -602,9 +1034,44 @@ export default {
             if (z && p && (p.scale.z >= 5 || z.vzdalenost < p.scale.z)) p.scale.z = Math.max(0.01, z.vzdalenost);
             if (z && (o.userData.zdroj?.handedness === 'right' || !h)) h = z;
           }
+        } else if (zamceno) {
+          h = trefBlok(paprsekStred());
         } else if (mysXY) {
           h = trefBlok(paprsekMysi(mysXY[0], mysXY[1]));
         }
+        // Přežití: těží se, dokud se drží spoušť (na PC levé tlačítko)
+        let tezim = null;
+        if (hra === 'preziti') {
+          if (vVR) {
+            for (let i = 0; i < 2 && !tezim; i++) {
+              const o = ovladac(i), gp = o.userData.zdroj?.gamepad;
+              if (!gp?.buttons[0]?.pressed) continue;
+              const ray = paprsekOvladace(o).clone();
+              if (mirisNaPaletu(ray)) continue;
+              tezim = { h: trefBlok(ray), gp };
+            }
+          } else if (mysDrzi && zamceno) {
+            tezim = { h: trefBlok(paprsekStred()), gp: null };
+          } else if (mysDrzi && mysXY) {
+            const ray = paprsekMysi(mysXY[0], mysXY[1]).clone();
+            if (!mirisNaPaletu(ray)) tezim = { h: trefBlok(ray), gp: null };
+          }
+        }
+        if (tezim) tez(tezim.h, dt, tezim.gp); else zrusTezbu();
+        prasklina.visible = tezba.postup > 0;
+        if (prasklina.visible) {
+          prasklina.position.set(tezba.x + .5, tezba.y + .5, tezba.z + .5);
+          prasklina.material.opacity = 0.15 + tezba.postup * 0.55;
+        }
+        for (let i = letajici.length - 1; i >= 0; i--) {
+          const l = letajici[i];
+          l.zivot += dt;
+          l.s.position.y += dt * l.rychlost;
+          l.s.material.opacity = Math.max(0, 1 - l.zivot / 1.3);
+          if (l.zivot > 1.3) { koren.remove(l.s); l.s.material.map.dispose(); l.s.material.dispose(); letajici.splice(i, 1); }
+        }
+        if (zprava && cas > zpravaDo) { zprava = ''; kresliHlavicku(); }
+
         obrys.visible = !!h;
         if (h) obrys.position.set(h.x + .5, h.y + .5, h.z + .5);
         if (h && rezim === 'stul') posledniMireni = h;
@@ -613,8 +1080,15 @@ export default {
       zrus() {
         el.removeEventListener('pointerdown', priDolu);
         el.removeEventListener('pointerup', priNahoru);
-        el.removeEventListener('pointermove', priPohybu);
+        document.removeEventListener('pointermove', priPohybu);
         window.removeEventListener('keydown', priKlavese);
+        window.removeEventListener('keyup', priPusteniKlavesy);
+        window.removeEventListener('blur', priZtrateFokusu);
+        el.removeEventListener('wheel', priKolecku);
+        document.removeEventListener('pointerlockchange', priZamceni);
+        if (document.pointerLockElement === el) document.exitPointerLock();
+        if (app.orbit) app.orbit.enabled = true;
+        hud.remove();
         scene.fog = null;
         camera.remove(vineta);
         vineta.geometry.dispose(); vineta.material.map.dispose(); vineta.material.dispose();
@@ -623,7 +1097,8 @@ export default {
           paleta.parent.remove(paleta);
           paleta.traverse((x) => { x.geometry?.dispose(); x.material?.map?.dispose(); x.material?.dispose(); });
         }
-        try { localStorage.setItem(KLIC, JSON.stringify({ seed, zmeny: [...zmeny] })); } catch (e) {}
+        clearTimeout(ulozCas);
+        try { localStorage.setItem(KLIC, stav()); } catch (e) {}
       },
     };
   },

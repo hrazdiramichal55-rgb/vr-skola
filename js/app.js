@@ -37,7 +37,7 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true;
 
-const app = { scene, camera, renderer };
+const app = { scene, camera, renderer, orbit };   // orbit = otáčení pohledu myší na PC (sekce ho může vypnout)
 
 // ---------- Přepínání sekcí ----------
 let koren = null;          // co je právě zobrazené (nabídka nebo sekce)
