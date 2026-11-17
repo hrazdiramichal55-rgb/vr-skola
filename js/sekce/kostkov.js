@@ -750,28 +750,30 @@ export default {
     const pc = { yaw: 0, pitch: 0, klavesy: {} };
     const OKO = 1.5;                                          // výška očí nad nohama (bloky)
     let stisk = null, mysXY = null, mysDrzi = false, zamceno = false;
-    // zamekNejde: prohlížeč nepovolil zamčení myši → rozhlíží se táhnutím, bloky se klikají myší
-    let zamekNejde = false;
+    // zamekSelhal: poslední pokus o zamčení myši nevyšel (např. hned po Esc nebo ho prohlížeč nepovolí).
+    // Pak se dá rozhlížet táhnutím a bloky těžit podržením tlačítka přímo na nich; další klik zkusí zamknout znovu.
+    let zamekSelhal = false;
     const uvnitrPC = () => rezim === 'uvnitr' && !renderer.xr.isPresenting;
     const paprsekStred = () => { mys.set(0, 0); rc.setFromCamera(mys, camera); return rc.ray; };
     function zamkniMys() {
-      try { const p = el.requestPointerLock(); p?.catch?.(() => { zamekNejde = true; }); } catch (e) { zamekNejde = true; }
-      setTimeout(() => { if (!zamceno && uvnitrPC()) zamekNejde = true; }, 700);
+      if (!el.requestPointerLock) { zamekSelhal = true; return; }
+      try { const p = el.requestPointerLock(); p?.catch?.(() => { zamekSelhal = true; }); } catch (e) { zamekSelhal = true; }
+      setTimeout(() => { if (!zamceno && uvnitrPC()) zamekSelhal = true; }, 700);
     }
+    const otocPohled = (dx, dy, citlivost) => {
+      pc.yaw -= dx * citlivost;
+      pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - dy * citlivost));
+    };
     const priDolu = (e) => {
-      if (uvnitrPC() && (zamceno || !zamekNejde)) {
-        stisk = null; mysDrzi = false;
-        if (!zamceno) {                                       // klik do světa = hrát dál
-          if (!mirisNaPaletu(paprsekMysi(e.clientX, e.clientY).clone())) zamkniMys();
-          return;
-        }
+      if (uvnitrPC() && zamceno) {                            // zamčená myš: míří se křížkem uprostřed
         stisk = { b: e.button, zamceno: true };
         mysDrzi = e.button === 0;
         return;
       }
-      stisk = { x: e.clientX, y: e.clientY, b: e.button };
+      stisk = { x: e.clientX, y: e.clientY, b: e.button, t: performance.now() };
       mysXY = [e.clientX, e.clientY];
-      mysDrzi = e.button === 0;
+      // uvnitř světa bez zámku se těží podržením jen tehdy, když zamčení nejde
+      mysDrzi = e.button === 0 && (!uvnitrPC() || zamekSelhal);
     };
     const priNahoru = (e) => {
       mysDrzi = false;
@@ -784,23 +786,22 @@ export default {
         return;
       }
       const posun = Math.hypot(e.clientX - stisk.x, e.clientY - stisk.y);
+      const kratky = performance.now() - stisk.t < 300;
       stisk = null;
       if (posun > 5) return;                                  // bylo to táhnutí
       const ray = paprsekMysi(e.clientX, e.clientY).clone();
       if (mirisNaPaletu(ray)) return;                         // tlačítka obslouží jádro
+      if (uvnitrPC() && b === 0 && (kratky || !zamekSelhal)) { zamkniMys(); return; }   // klik do světa = zamknout myš
       const h = trefBlok(ray);
       if (b === 2) poloz(h); else if (b === 0 && hra === 'tvoreni') vytez(h);
     };
+    // rozhlížení: se zamčenou myší stačí pohyb, jinak táhnutí se stisknutým tlačítkem
+    const priPohybuMysi = (e) => {
+      if (zamceno) { otocPohled(e.movementX || 0, e.movementY || 0, 0.0022); return; }
+      if (uvnitrPC() && stisk && e.buttons) otocPohled(e.movementX || 0, e.movementY || 0, 0.004);
+    };
     const priPohybu = (e) => {
-      if (zamceno) {
-        pc.yaw -= e.movementX * 0.0022;
-        pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - e.movementY * 0.0022));
-        return;
-      }
-      if (uvnitrPC() && stisk && e.buttons) {                 // záložní ovládání: táhnutí = rozhlížení
-        pc.yaw -= e.movementX * 0.004;
-        pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - e.movementY * 0.004));
-      }
+      if (zamceno) return;
       mysXY = [e.clientX, e.clientY];
       if (stisk && Math.hypot(e.clientX - stisk.x, e.clientY - stisk.y) > 5) mysDrzi = false;   // otáčí pohledem
     };
@@ -817,11 +818,13 @@ export default {
     const priKolecku = (e) => { if (zamceno) posunVyber(e.deltaY > 0 ? 1 : -1); };
     const priZamceni = () => {
       zamceno = document.pointerLockElement === el;
-      if (!zamceno) { pc.klavesy = {}; mysDrzi = false; }
+      if (zamceno) zamekSelhal = false;
+      mysDrzi = false; stisk = null;
     };
     el.addEventListener('pointerdown', priDolu);
     el.addEventListener('pointerup', priNahoru);
     document.addEventListener('pointermove', priPohybu);
+    document.addEventListener('mousemove', priPohybuMysi);
     window.addEventListener('keydown', priKlavese);
     window.addEventListener('keyup', priPusteniKlavesy);
     window.addEventListener('blur', priZtrateFokusu);
@@ -848,17 +851,17 @@ export default {
       const t = zamceno
         ? 'WASD chůze · mezerník skok · Shift běh · ' + (hra === 'preziti' ? 'drž levé tlačítko = těžit' : 'levé tlačítko = těžit') +
           ' · pravé = položit · 1–9 / kolečko = blok · E = batoh a výroba'
-        : zamekNejde
-          ? 'WASD chůze · mezerník skok · táhni myší = rozhlížení · ' + (hra === 'preziti' ? 'podrž levé tlačítko na bloku = těžit' : 'klikni na blok = těžit') +
-            ' · pravé = položit · panel vpravo nahoře = batoh a výroba'
-          : 'Klikni do světa a hraj dál. Batoh, výroba a návrat ke stavebnici jsou na panelu vpravo nahoře.';
+        : zamekSelhal
+          ? 'Myš se nepodařilo zamknout, klikni do světa znovu. Zatím: táhni myší = rozhlížení · WASD chůze · ' +
+            (hra === 'preziti' ? 'podrž levé tlačítko na bloku = těžit' : 'podrž levé tlačítko na bloku = těžit') + ' · pravé = položit'
+          : 'Klikni do světa a otáčej se myší. Táhnutím se rozhlížíš i teď. Batoh a výroba jsou na panelu vpravo nahoře.';
       if (t !== hudText) { hudText = t; hudRada.textContent = t; }
     }
 
     function ovladaniPC() {
       const k = pc.klavesy, fx = -Math.sin(pc.yaw), fz = -Math.cos(pc.yaw);
       let mx = 0, mz = 0;
-      const ovlada = zamceno || zamekNejde;
+      const ovlada = true;                                    // chodit jde i s puštěnou myší
       if (ovlada) {
         if (k.KeyW || k.ArrowUp) { mx += fx; mz += fz; }
         if (k.KeyS || k.ArrowDown) { mx -= fx; mz -= fz; }
@@ -1081,6 +1084,7 @@ export default {
         el.removeEventListener('pointerdown', priDolu);
         el.removeEventListener('pointerup', priNahoru);
         document.removeEventListener('pointermove', priPohybu);
+        document.removeEventListener('mousemove', priPohybuMysi);
         window.removeEventListener('keydown', priKlavese);
         window.removeEventListener('keyup', priPusteniKlavesy);
         window.removeEventListener('blur', priZtrateFokusu);
