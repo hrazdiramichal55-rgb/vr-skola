@@ -106,6 +106,11 @@ export function rust() {
   [392, 494, 587, 784].forEach((f, i) => tonik(f, f * 1.02, 0.2, 0.12, 'triangle', i * 0.09));
 }
 export function chyba() { if (pripraveno()) { tonik(220, 200, 0.12, 0.12, 'square'); tonik(180, 160, 0.16, 0.12, 'square', 0.14); } }
+export function au() {                     // zranění
+  if (!pripraveno()) return;
+  tonik(320, 110, 0.28, 0.22, 'sawtooth');
+  sumik('lowpass', 500, 0.7, 0.18, 0.3);
+}
 export function klik() { if (pripraveno()) tonik(1000, 1000, 0.03, 0.08, 'square'); }
 
 // --- hlasy postaviček a zvířat ---
@@ -147,5 +152,5 @@ export function materialBloku(id, BL) {
   const def = BL[id]; if (!def) return 'kamen';
   if (def.zvuk) return def.zvuk;
   if (def.kytka) return 'trava';
-  return ({ 1: 'trava', 2: 'trava', 3: 'kamen', 4: 'pisek', 5: 'drevo', 6: 'trava', 7: 'drevo', 8: 'kamen', 9: 'sklo', 11: 'kamen' })[id] || 'kamen';
+  return ({ 1: 'trava', 2: 'trava', 3: 'kamen', 4: 'pisek', 5: 'drevo', 6: 'trava', 7: 'drevo', 8: 'kamen', 9: 'sklo', 11: 'kamen', 12: 'kamen', 13: 'kov', 14: 'kamen', 15: 'drevo', 16: 'drevo', 17: 'drevo' })[id] || 'kamen';
 }

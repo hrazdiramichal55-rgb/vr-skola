@@ -60,6 +60,8 @@ export const PRAVIDLA = {
   skok:      { n: 'Výška skoku', min: 3, max: 20, krok: 0.5, vychozi: 7, popis: 'Čím víc, tím výš skočíš' },
   rychlost:  { n: 'Rychlost chůze', min: 1, max: 10, krok: 0.2, vychozi: 2.6, popis: 'Bloků za sekundu' },
   tezba:     { n: 'Rychlost těžby', min: 0.25, max: 5, krok: 0.25, vychozi: 1, popis: '1 = normální · 5 = superrychlá' },
+  srdce:     { n: 'Počet srdíček (životy)', min: 0, max: 20, krok: 1, vychozi: 10, popis: 'Jen v Přežití · ubírá je pád z výšky a voda · 0 = bez životů' },
+  delkaDne:  { n: 'Délka dne a noci (minuty)', min: 0, max: 20, krok: 1, vychozi: 6, popis: 'Kolik minut trvá celý den i s nocí · 0 = pořád den' },
 };
 
 // ---------- pixely (16 × 16, '' = průhledné) ----------
@@ -82,6 +84,9 @@ export function vychoziDilna() {
     bloky: [
       { id: 20, n: 'Březová kůra', nastroj: 'sekera', nutny: false, uroven: 'drevo', tvrdost: 2.5, vyskyt: 'nikde', cetnost: 0, zvuk: 'drevo',
         px: nakresli((x, y) => ((y * 7 + x * 3) % 13 === 0 || (y % 6 === 2 && x % 7 < 3)) ? '#2b2b2b' : (x + y) % 5 === 0 ? '#d9d6cc' : '#eeebe3') },
+      { id: 21, n: 'Lucerna', nastroj: 'ruka', nutny: false, uroven: 'drevo', tvrdost: 0.5, vyskyt: 'nikde', cetnost: 0, zvuk: 'sklo', sviti: true,
+        px: nakresli((x, y) => (x < 2 || x > 13 || y < 2 || y > 13 || x === 7 || x === 8 || y === 7 || y === 8) ? '#4a3420'
+          : kruh(x, y, 7.5, 7.5, 3.5) ? '#fff4b0' : '#f5c542') },
     ],
     kytky: [
       { id: 60, n: 'Mák', cetnost: 4, px: nakresli((x, y) =>
@@ -143,6 +148,7 @@ export function opravDilnu(d) {
         uroven: UROVEN[b.uroven] ? b.uroven : 'drevo',
         tvrdost: cislo(stara ? stara.tvrdost : b.tvrdost, 0.2, 10, 1),
         vyskyt: VYSKYT[b.vyskyt] ? b.vyskyt : 'nikde', cetnost: cislo(b.cetnost, 0, 10, 3),
+        sviti: !!b.sviti,
         zvuk: zvuky.MATERIALY[b.zvuk] ? b.zvuk : ({ krumpac: 'kamen', sekera: 'drevo', lopata: 'trava' })[NASTROJ_TEZBY[b.nastroj] ? b.nastroj : stara?.nastroj] || 'kamen' };
     }),
     kytky: pole(d.kytky).filter((b) => b.id >= 60 && b.id <= 99).map((b) => ({ id: b.id | 0, n: text(b.n, 'Kytka'), cetnost: cislo(b.cetnost, 0, 10, 3), px: px(b.px) })),
@@ -231,6 +237,7 @@ const BARVY = ['#000000', '#3a3a3a', '#7a7a7a', '#bfbfbf', '#ffffff', '#7a4a22',
 const CSS = `
 .kd{position:fixed;inset:0;z-index:50;background:rgba(6,10,20,.72);display:grid;place-items:center;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#fff;padding:12px;box-sizing:border-box}
 .kd *{box-sizing:border-box}
+.kd [hidden]{display:none!important}
 .kd-okno{width:min(1100px,100%);height:min(760px,100%);background:#0c162c;border:3px solid #3d5a88;border-radius:18px;display:flex;flex-direction:column;overflow:hidden}
 .kd-hlava{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:2px solid #22355a;flex-wrap:wrap}
 .kd-hlava h2{margin:0;font-size:24px;color:#ffd36b;margin-right:auto}
@@ -551,6 +558,8 @@ export function otevriDilnu({ dilna, zakladniBloky, priZavreni }) {
       cetnost.input.disabled = b.vyskyt === 'nikde';
     };
     nutny.onchange = () => { b.nutny = nutny.checked; zmena(); obnov(); };
+    const sviti = document.createElement('input'); sviti.type = 'checkbox'; sviti.checked = !!b.sviti;
+    sviti.onchange = () => { b.sviti = sviti.checked; zmena(); };
     editor.append(
       tip('Nakresli, jak bude blok vypadat (stejný obrázek je na všech stranách kostky). Pak vyber, čím se těží a kde se ve světě sám objeví.'),
       radek(pole('Název bloku', textovePole(b, 'n', 24, zmena)),
@@ -561,6 +570,7 @@ export function otevriDilnu({ dilna, zakladniBloky, priZavreni }) {
         pole('Jak silný nástroj', uroven, 'Platí, jen když bez nástroje to nejde')),
       radek(pole('Jak dlouho se těží', posuvnik(b, 'tvrdost', 0.2, 10, 0.1, zmena, (v) => v.toFixed(1).replace('.', ',') + ' s rukou'),
         'Dřevěný nástroj to zrychlí 2,5×, kamenný 5×'),
+        pole('Svítí ve tmě', sviti, 'V noci zůstane jasný, třeba lucerna'),
         pole('Jaký dělá zvuk', vyber(b, 'zvuk', Object.entries(zvuky.MATERIALY), () => { zmena(); zvuky.odemkni(); setTimeout(() => zvuky.rozbiti(b.zvuk), 30); })),
         (() => { const d = document.createElement('div'); d.className = 'kd-pole'; d.style.justifyContent = 'flex-end'; d.style.minWidth = '0'; d.style.flex = '0';
           d.append(tlacitkoPrehrat('Poslechnout', () => zvuky.rozbiti(b.zvuk))); return d; })()),
