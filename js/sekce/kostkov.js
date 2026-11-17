@@ -25,17 +25,22 @@
 //   uvnitř světa: myš = rozhlížení, WASD = chůze, mezerník = skok, Shift = běh,
 //   E nebo Esc = pustit myš a klikat na paletu (batoh, výroba, zpět ke stolu).
 //
-//  Stavby se ukládají v prohlížeči (na každých brýlích zvlášť).
-//  Velikost světa, rychlost chůze nebo gravitaci lze změnit níže.
+//  Dílna (kostkov-dilna.js): děti si na PC samy navrhnou bloky, kytky, druhy
+//  stromů, postavičky (kostkov-postavy.js) a pravidla (gravitace, skok…).
+//
+//  Stavby i návrhy se ukládají v prohlížeči (na každém počítači a brýlích zvlášť).
 // =====================================================================
 import * as THREE from 'three';
 import { vytvorTlacitko, vytvorPanel, pozadiPanelu, zaobleny, stitek } from '../ui.js';
+import { nactiDilnu, otevriDilnu, bunkyStromu, prumernaBarva, SILA_UROVNE } from './kostkov-dilna.js';
+import { vytvorPostavy, sestavPostavu } from './kostkov-postavy.js';
+import * as zvuky from './kostkov-zvuky.js';
 
 const NX = 64, NZ = 64, NY = 32, CH = 16, NCX = NX / CH, NCZ = NZ / CH, MORE = 9;
 const KLIC = 'vr-skola-kostkov-v1';
 const STUL = { y: 0.78, z: -0.9, meritko: 1.2 / NX };   // stůl se světem širokým 1,2 m
-const RYCHLOST = 2.6, GRAVITACE = 20, SKOK = 7, OTOCENI = Math.PI / 6;
-const SIRKA = 0.3, VYSKA = 1.6;                             // hráč v blocích (1 blok = 1 m)
+const OTOCENI = Math.PI / 6;                               // gravitaci, skok a rychlost nastavují děti v Dílně (Pravidla)
+let SIRKA = 0.3, VYSKA = 1.6;                               // hráč v blocích (1 blok = 1 m); mění se podle velikosti „Moje postava“
 
 // ---------- bloky ----------
 const A = 0, TRAVA = 1, HLINA = 2, KAMEN = 3, PISEK = 4, KMEN = 5, LISTI = 6, PRKNA = 7, CIHLY = 8, SKLO = 9, VODA = 10, PODLOZI = 11;
@@ -53,7 +58,7 @@ const BL = {
   [VODA]:    { n: 'Voda',    t: [11, 11, 11], pevny: 0, pruhl: 1, barva: '#3470c4' },
   [PODLOZI]: { n: 'Podloží', t: [12, 12, 12], pevny: 1, barva: '#444' },
 };
-const PALETA = [TRAVA, HLINA, KAMEN, PISEK, KMEN, LISTI, PRKNA, CIHLY, SKLO];
+const PALETA = [TRAVA, HLINA, KAMEN, PISEK, KMEN, LISTI, PRKNA, CIHLY, SKLO];   // + vlastní bloky, kytky a sazenice z Dílny
 
 // ---------- režim Přežití: nástroje, těžba a výroba ----------
 // Na začátku je batoh prázdný. Rukou jde vytěžit dřevo, z něj se vyrobí
@@ -112,9 +117,10 @@ function sum(x, z, s) {
 function fbm(x, z, s) { let t = 0, amp = 1, f = 1, n = 0; for (let o = 0; o < 4; o++) { t += sum(x * f, z * f, s + o) * amp; n += amp; amp *= .5; f *= 2; } return t / n; }
 
 // ---------- textury (vlastní pixel art, 16 × 16 px) ----------
-const TS = 16, DLAZDIC = 16;
+// Atlas má 16 × 8 dlaždic: řádek 0 jsou bloky hry, od dlaždice 16 kresby z Dílny.
+const TS = 16, DLAZDIC = 16, RADKU = 8, PRVNI_VLASTNI = 16;
 function vytvorAtlas() {
-  const atlas = document.createElement('canvas'); atlas.width = TS * DLAZDIC; atlas.height = TS;
+  const atlas = document.createElement('canvas'); atlas.width = TS * DLAZDIC; atlas.height = TS * RADKU;
   const actx = atlas.getContext('2d'); const img = actx.createImageData(atlas.width, TS);
   const j = (c, v, k) => [c[0] * (1 - k / 2 + k * v), c[1] * (1 - k / 2 + k * v), c[2] * (1 - k / 2 + k * v)];
   const tile = (i, seed, fn) => {
@@ -157,7 +163,7 @@ export default {
   nazev: 'Kostkov',
   popis: 'Postav si vlastní svět',
   barva: '#f2b544',
-  napovedaPC: 'Kostičkový svět na stole. Na panelu vpravo přepneš, jestli hraješ na PC, nebo ve VR. Na PC klikni na „Vstoupit do světa“ a chodíš jako v počítačové hře (WASD, myš, E = batoh). Začínáš s prázdným batohem: podrž levé tlačítko na kmeni stromu a ve Výrobě si udělej prkna, klacky a nástroje.',
+  napovedaPC: 'Kostičkový svět na stole. V Dílně (tlačítko na panelu vpravo) si nakreslíš vlastní bloky, kytky, stromy a postavičky a nastavíš pravidla hry. Na panelu taky přepneš, jestli hraješ na PC, nebo ve VR. Na PC klikni na „Vstoupit do světa“ a chodíš jako v počítačové hře (WASD, myš, E = batoh). Začínáš s prázdným batohem: podrž levé tlačítko na kmeni stromu a ve Výrobě si udělej prkna, klacky a nástroje.',
 
   spust(app) {
     const { scene, camera, renderer } = app;
@@ -182,9 +188,10 @@ export default {
         if (s.hra) hra = s.hra;
         if (s.batoh) batoh = s.batoh;
         if (s.ovladani) { ovladani = s.ovladani; ovladaniUlozene = true; }
+        if (s.zvuk === false) zvuky.nastavZapnuto(false);
       } else seed = (Math.random() * 1e9) | 0;
     } catch (e) { seed = (Math.random() * 1e9) | 0; }
-    const stav = () => JSON.stringify({ seed, zmeny: [...zmeny], hra, batoh, ovladani });
+    const stav = () => JSON.stringify({ seed, zmeny: [...zmeny], hra, batoh, ovladani, zvuk: zvuky.jeZapnuto() });
     let ulozCas = 0;
     const uloz = () => {
       clearTimeout(ulozCas);
@@ -193,16 +200,76 @@ export default {
     const pocet = (id) => batoh[id] || 0;
     const pridej = (id, k) => { batoh[id] = pocet(id) + k; if (batoh[id] <= 0) delete batoh[id]; };
 
-    function strom(x, y, z) {
-      const h = 4 + Math.floor(hash(x, z, seed + 3) * 2);
-      for (let i = 0; i < h; i++) setRaw(x, y + i, z, KMEN);
-      const vrch = y + h;
-      for (let dy = -2; dy <= 1; dy++) {
-        const r = dy >= 0 ? 1 : 2;
-        for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
-          if (Math.abs(dx) === r && Math.abs(dz) === r && (dy === 1 || hash(x + dx, z + dz, seed + dy) < .5)) continue;
-          if (get(x + dx, vrch + dy, z + dz) === A) setRaw(x + dx, vrch + dy, z + dz, LISTI);
-        }
+    // ---------- Dílna: vlastní bloky, kytky, stromy, postavičky a pravidla ----------
+    let dilna = nactiDilnu();
+    const pravidla = () => dilna.pravidla;
+    const atlasCanvas = vytvorAtlas();
+    let tex = null;
+    let vlastniIds = [];                    // vlastní bloky, kytky a sazenice (pro paletu a batoh)
+    function kresliDlazdici(index, px, pozadi) {
+      const ctx = atlasCanvas.getContext('2d');
+      const x0 = (index % DLAZDIC) * TS, y0 = Math.floor(index / DLAZDIC) * TS;
+      ctx.clearRect(x0, y0, TS, TS);
+      if (pozadi) { ctx.fillStyle = pozadi; ctx.fillRect(x0, y0, TS, TS); }
+      px.forEach((b, i) => { if (b) { ctx.fillStyle = b; ctx.fillRect(x0 + i % 16, y0 + (i >> 4), 1, 1); } });
+    }
+    const barvaBloku = (id) => BL[id]?.barva || '#888888';
+    function obrazekSazenice(druh) {                 // malý stromek z barev kmene a listí
+      const k = barvaBloku(druh.kmen), l = druh.listi ? barvaBloku(druh.listi) : k;
+      const px = Array(256).fill('');
+      for (let y = 9; y < 16; y++) { px[y * 16 + 7] = k; px[y * 16 + 8] = k; }
+      for (let y = 2; y < 10; y++) for (let x = 3; x < 13; x++) if ((x - 7.5) ** 2 / 25 + (y - 5.5) ** 2 / 16 <= 1) px[y * 16 + x] = l;
+      return px;
+    }
+    function registrujVlastni() {
+      for (const id of vlastniIds) { delete BL[id]; delete TEZBA[id]; }
+      vlastniIds = [];
+      let dlazdice = PRVNI_VLASTNI;
+      const volno = () => dlazdice < DLAZDIC * RADKU;
+      for (const b of dilna.bloky) {
+        if (!volno()) break;
+        kresliDlazdici(dlazdice, b.px, '#ffffff');
+        BL[b.id] = { n: b.n, t: [dlazdice, dlazdice, dlazdice], pevny: 1, barva: prumernaBarva(b.px), vlastni: 1, zvuk: b.zvuk };
+        const nastroj = b.nastroj === 'ruka' ? null : b.nastroj, nutny = !!nastroj && b.nutny;
+        TEZBA[b.id] = { tvrdost: b.tvrdost, nastroj, nutny, uroven: nutny ? SILA_UROVNE[b.uroven] : 0, dava: b.id };
+        vlastniIds.push(b.id); dlazdice++;
+      }
+      for (const k of dilna.kytky) {
+        if (!volno()) break;
+        kresliDlazdici(dlazdice, k.px);
+        BL[k.id] = { n: k.n, t: [dlazdice, dlazdice, dlazdice], pevny: 0, kytka: 1, barva: prumernaBarva(k.px, '#e05050') };
+        TEZBA[k.id] = { tvrdost: 0.15, dava: k.id };
+        vlastniIds.push(k.id); dlazdice++;
+      }
+      for (const s of dilna.stromy) {
+        if (!volno()) break;
+        kresliDlazdici(dlazdice, obrazekSazenice(s));
+        BL[s.id] = { n: 'Sazenice: ' + s.n, t: [dlazdice, dlazdice, dlazdice], pevny: 0, kytka: 1, sazenice: s, barva: s.listi ? barvaBloku(s.listi) : barvaBloku(s.kmen) };
+        TEZBA[s.id] = { tvrdost: 0.15, dava: s.id };
+        vlastniIds.push(s.id); dlazdice++;
+      }
+      if (tex) tex.needsUpdate = true;
+    }
+    // bloky ze smazaných návrhů zmizí ze světa i z batohu
+    function vycistiNezname() {
+      for (let i = 0; i < svetData.length; i++) { const id = svetData[i]; if (id && !BL[id]) svetData[i] = A; }
+      for (const [k, id] of zmeny) if (id && !BL[id]) zmeny.set(k, A);
+      for (const k of Object.keys(batoh)) if (/^\d+$/.test(k) && !BL[+k]) delete batoh[k];
+    }
+    registrujVlastni();
+
+    // Strom podle druhu z Dílny. "nastav" zapisuje bloky (při růstu sazenice se i ukládají).
+    function strom(x, y, z, druh, nastav = setRaw) {
+      const kmen = BL[druh.kmen] && !BL[druh.kmen].kytka ? druh.kmen : KMEN;
+      const listi = druh.listi ? (BL[druh.listi] && !BL[druh.listi].kytka ? druh.listi : LISTI) : 0;
+      let i = 0;
+      const nahoda = () => hash(x * 7 + (i++), z * 13, seed + 3);
+      for (const [dx, dy, dz, t] of bunkyStromu(druh, nahoda)) {
+        const id = t === 'k' ? kmen : listi; if (!id) continue;
+        const X = x + dx, Y = y + dy, Z = z + dz;
+        if (!uvnitr(X, Y, Z)) continue;
+        const ted = get(X, Y, Z);
+        if (ted === A || BL[ted]?.kytka || (t === 'k' && ted === listi)) nastav(X, Y, Z, id);
       }
     }
     function generuj() {
@@ -221,9 +288,47 @@ export default {
           svetData[idx(x, y, z)] = id;
         }
       }
+      // vlastní bloky z Dílny: ostrůvky na povrchu, nebo ruda v kameni (v podzemí / hluboko)
+      for (const b of dilna.bloky) {
+        if (!BL[b.id] || b.vyskyt === 'nikde' || !b.cetnost) continue;
+        const kolik = Math.round(b.cetnost * (b.vyskyt === 'povrch' ? 4 : b.vyskyt === 'hluboko' ? 5 : 9));
+        for (let i = 0; i < kolik; i++) {
+          const x = Math.floor(hash(i, b.id, seed + 11) * NX), z = Math.floor(hash(b.id, i, seed + 13) * NZ);
+          const h = vysky[z * NX + x];
+          if (b.vyskyt === 'povrch') {
+            const r = 1 + Math.floor(hash(i, z, seed + 17) * 2);
+            for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+              if (dx * dx + dz * dz > r * r + 0.5) continue;
+              const X = x + dx, Z = z + dz; if (!uvnitr(X, 0, Z)) continue;
+              const h2 = vysky[Z * NX + X];
+              if ([TRAVA, PISEK, HLINA].includes(get(X, h2, Z))) setRaw(X, h2, Z, b.id);
+            }
+          } else {
+            const yMin = b.vyskyt === 'hluboko' ? 1 : 2, yMax = b.vyskyt === 'hluboko' ? Math.min(4, h - 4) : h - 4;
+            if (yMax < yMin) continue;
+            let X = x, Y = yMin + Math.floor(hash(i, x, seed + 19) * (yMax - yMin + 1)), Z = z;
+            const delka = 3 + Math.floor(hash(z, i, seed + 23) * 4);     // žíla 3–6 bloků
+            for (let k = 0; k < delka; k++) {
+              if (get(X, Y, Z) === KAMEN) setRaw(X, Y, Z, b.id);
+              const smer = Math.floor(hash(k, i, seed + b.id) * 6);
+              if (smer === 0) X++; else if (smer === 1) X--; else if (smer === 2) Z++; else if (smer === 3) Z--; else if (smer === 4) Y++; else Y = Math.max(1, Y - 1);
+            }
+          }
+        }
+      }
+      // stromy a kytky z Dílny (četnost 0–10)
+      const druhy = dilna.stromy.filter((s) => s.cetnost > 0);
+      const soucet = druhy.reduce((a, s) => a + s.cetnost, 0);
       for (let z = 3; z < NZ - 3; z++) for (let x = 3; x < NX - 3; x++) {
         const h = vysky[z * NX + x];
-        if (get(x, h, z) === TRAVA && hash(x, z, seed + 7) < .016) strom(x, h + 1, z);
+        if (get(x, h, z) !== TRAVA) continue;
+        if (soucet && hash(x, z, seed + 7) < soucet * 0.0018) {
+          let r = hash(x, z, seed + 8) * soucet;
+          strom(x, h + 1, z, druhy.find((s) => (r -= s.cetnost) < 0) || druhy[0]);
+          continue;
+        }
+        if (get(x, h + 1, z) !== A) continue;
+        for (const k of dilna.kytky) if (k.cetnost > 0 && hash(x, z, seed + k.id) < k.cetnost * 0.004) { setRaw(x, h + 1, z, k.id); break; }
       }
       for (const [k, id] of zmeny) { const [x, y, z] = k.split(',').map(Number); setRaw(x, y, z, id); }
     }
@@ -232,34 +337,54 @@ export default {
     const svet = new THREE.Group(), mapa = new THREE.Group();
     svet.add(mapa); koren.add(svet);
 
-    const tex = new THREE.CanvasTexture(vytvorAtlas());
+    tex = new THREE.CanvasTexture(atlasCanvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.magFilter = tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
     const matPevny = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true });
     const matPruhl = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    const matKytky = new THREE.MeshBasicMaterial({ map: tex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const MATERIALY = [matPevny, matPruhl, matKytky];
 
+    // průhledné okolí: sousední stěna se kreslí, když je vedle vzduch, sklo, voda nebo kytka
+    const pruhledny = (id) => !id || BL[id]?.pruhl || BL[id]?.kytka;
     const kusy = [];
     function postavKus(cx, cz) {
-      const out = [{ p: [], u: [], c: [], i: [] }, { p: [], u: [], c: [], i: [] }];
+      const out = [0, 1, 2].map(() => ({ p: [], u: [], c: [], i: [] }));   // 0 pevné, 1 průhledné, 2 kytky
       const e = .002;
+      const uv = (t, ux, uy) => {
+        const sl = t % DLAZDIC, ra = Math.floor(t / DLAZDIC);
+        return [(sl + (ux ? 1 - e : e)) / DLAZDIC, 1 - (ra + (uy ? e : 1 - e)) / RADKU];
+      };
       for (let y = 0; y < NY; y++) for (let z = cz * CH; z < cz * CH + CH; z++) for (let x = cx * CH; x < cx * CH + CH; x++) {
         const id = svetData[idx(x, y, z)]; if (!id) continue;
-        const def = BL[id], pr = !!def.pruhl, o = out[pr ? 1 : 0];
+        const def = BL[id];
+        if (def.kytka) {                                      // kytka = dva zkřížené obrázky
+          const o = out[2];
+          for (const [ax, az, bx, bz] of [[.15, .15, .85, .85], [.15, .85, .85, .15]]) {
+            const n = o.p.length / 3;
+            o.p.push(x + ax, y, z + az, x + bx, y, z + bz, x + ax, y + 1, z + az, x + bx, y + 1, z + bz);
+            o.u.push(...uv(def.t[0], 0, 0), ...uv(def.t[0], 1, 0), ...uv(def.t[0], 0, 1), ...uv(def.t[0], 1, 1));
+            o.c.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+            o.i.push(n, n + 1, n + 2, n + 2, n + 1, n + 3);
+          }
+          continue;
+        }
+        const pr = !!def.pruhl, o = out[pr ? 1 : 0];
         for (const f of STENY) {
           const sous = get(x + f.d[0], y + f.d[1], z + f.d[2]);
-          const ukaz = pr ? (!sous || (sous !== id && BL[sous].pruhl)) : (!sous || BL[sous].pruhl);
+          const ukaz = pr ? (!sous || (sous !== id && pruhledny(sous))) : pruhledny(sous);
           if (!ukaz) continue;
           const t = def.t[f.k], n = o.p.length / 3, st = f.s * f.s;   // stín v lineárních barvách
           const nizsi = id === VODA && get(x, y + 1, z) !== VODA;
           for (const [px, py, pz, ux, uy] of f.c) {
             o.p.push(x + px, y + (py && nizsi ? .88 : py), z + pz);
-            o.u.push((t + (ux ? 1 - e : e)) / DLAZDIC, uy ? 1 - e : e);
+            o.u.push(...uv(t, ux, uy));
             o.c.push(st, st, st);
           }
           o.i.push(n, n + 1, n + 2, n + 2, n + 1, n + 3);
         }
       }
-      const slot = kusy[cx + cz * NCX] || (kusy[cx + cz * NCX] = [null, null]);
+      const slot = kusy[cx + cz * NCX] || (kusy[cx + cz * NCX] = [null, null, null]);
       out.forEach((o, k) => {
         if (slot[k]) { mapa.remove(slot[k]); slot[k].geometry.dispose(); slot[k] = null; }
         if (!o.i.length) return;
@@ -268,8 +393,8 @@ export default {
         g.setAttribute('uv', new THREE.Float32BufferAttribute(o.u, 2));
         g.setAttribute('color', new THREE.Float32BufferAttribute(o.c, 3));
         g.setIndex(o.i); g.computeBoundingSphere();
-        const m = new THREE.Mesh(g, k ? matPruhl : matPevny);
-        if (k) m.renderOrder = 1;
+        const m = new THREE.Mesh(g, MATERIALY[k]);
+        if (k === 1) m.renderOrder = 1;
         mapa.add(m); slot[k] = m;
       });
     }
@@ -286,7 +411,7 @@ export default {
       setRaw(x, y, z, id); zmeny.set(x + ',' + y + ',' + z, id);
       prestavOkoli(x, z); uloz();
     }
-    generuj(); postavVse();
+    generuj(); vycistiNezname(); postavVse();
     uloz();                                        // ať se svět při příštím otevření nezmění
 
     // podstavec a tráva pod stolem (jen ve stavebnici)
@@ -313,6 +438,13 @@ export default {
       if (y >= NY) return false;
       const id = svetData[idx(x, y, z)]; return id && BL[id].pevny;
     };
+
+    // postavičky z Dílny
+    const postavy = vytvorPostavy(mapa, { NX, NZ, NY, get, pevne, VODA, TRAVA, hash,
+      priReci: (def) => zvuky.rekni(def.rec, def.hlas ?? 1, rezim === 'stul' ? 0.6 : 1) });
+    const vsechnyPostavy = () => [...dilna.postavy, ...dilna.zvirata.map((z) => ({ ...z, zvire: true, rec: z.zvuk }))];
+    postavy.rozmisti(vsechnyPostavy(), seed);
+    const rostouci = [];                     // zasazené sazenice, které za chvíli vyrostou
     function narazi() {
       const p = H.pos;
       for (let y = Math.floor(p.y); y <= Math.floor(p.y + VYSKA - 1e-4); y++)
@@ -359,7 +491,7 @@ export default {
 
     // ---------- paleta: batoh, výroba a tlačítka ----------
     const paleta = new THREE.Group();
-    let pohled = 'batoh', vybranyPredmet = null;
+    let pohled = 'batoh', vybranyPredmet = null, stranka = 0;
     let cas = 0, zprava = '', zpravaDobra = true, zpravaDo = 0;
 
     const hlavicka = vytvorPanel(0.56, 0.15, 768);
@@ -401,6 +533,7 @@ export default {
       t.needsUpdate = true;
     }
     function ukazZpravu(text, dobra) {
+      if (!dobra) zvuky.chyba();
       zprava = text; zpravaDobra = dobra; zpravaDo = cas + 2.5;
       kresliHlavicku();
     }
@@ -443,7 +576,8 @@ export default {
       return b;
     });
 
-    const polozitelne = () => hra === 'tvoreni' ? PALETA : PORADI_BATOHU.filter((id) => BL[id] && pocet(id) > 0);
+    const poradiBatohu = () => [...PORADI_BATOHU, ...vlastniIds];
+    const polozitelne = () => hra === 'tvoreni' ? [...PALETA, ...vlastniIds] : poradiBatohu().filter((id) => BL[id] && pocet(id) > 0);
     function vyber(id) { vybranyPredmet = id; prekresli(); }
     function posunVyber(o) {
       const s = polozitelne(); if (!s.length) return;
@@ -458,15 +592,16 @@ export default {
       pridej(r.dava[0], r.dava[1]);
       if (vybranyPredmet === null && BL[r.dava[0]]) vybranyPredmet = r.dava[0];
       ukazZpravu('Vyrobeno: ' + r.n + (r.dava[1] > 1 ? ' ×' + r.dava[1] : ''), true);
+      zvuky.vyroba();
       prekresli(); uloz();
     }
 
     function prekresli() {
       let polozky;
       if (hra === 'tvoreni') {
-        polozky = PALETA.map((id) => ({ text: BL[id].n, barva: BL[id].barva, pri: () => vyber(id), aktivni: vybranyPredmet === id }));
+        polozky = polozitelne().map((id) => ({ text: BL[id].n, barva: BL[id].barva, pri: () => vyber(id), aktivni: vybranyPredmet === id }));
       } else if (pohled === 'batoh') {
-        const mam = PORADI_BATOHU.filter((id) => pocet(id) > 0);
+        const mam = poradiBatohu().filter((id) => pocet(id) > 0);
         polozky = mam.length
           ? mam.map((id) => ({
               text: nazevPredmetu(id), podtext: '× ' + pocet(id) + (BL[id] ? '' : '  (na výrobu)'),
@@ -481,6 +616,14 @@ export default {
             barva: NASTROJE[r.dava[0]] ? '#f2b544' : '#b08a50', vypnuto: uzMa || !lzeVyrobit(r), pri: () => vyrob(r) };
         });
       }
+      // víc než 9 položek → stránky po 8 a deváté tlačítko „Další“
+      if (polozky.length > 9) {
+        const stran = Math.ceil(polozky.length / 8);
+        if (stranka >= stran) stranka = 0;
+        const s = stranka;
+        polozky = [...polozky.slice(s * 8, s * 8 + 8),
+          { text: 'Další ▸', podtext: `strana ${s + 1} z ${stran}`, barva: '#ffd36b', pri: () => { stranka = (s + 1) % stran; prekresli(); } }];
+      } else stranka = 0;
       mrizka.forEach((b, i) => {
         const p = polozky[i];
         b.visible = !!p;
@@ -489,21 +632,35 @@ export default {
         b.userData.kresli();
       });
       tlVyroba.visible = hra === 'preziti';
-      tlVyroba.userData.text = pohled === 'vyroba' ? 'Zpět do batohu' : 'Výroba nástrojů';
+      tlVyroba.userData.text = pohled === 'vyroba' ? 'Zpět do batohu' : 'Výroba';
       tlVyroba.userData.kresli();
       tlHra.userData.text = hra === 'preziti' ? 'Přežití' : 'Tvoření';
       tlHra.userData.kresli();
       tlOvladani.userData.text = ovladani === 'pc' ? 'Hraju na PC' : 'Hraju ve VR';
       tlOvladani.userData.kresli();
+      tlZvuk.userData.text = zvuky.jeZapnuto() ? 'Zvuk: ano' : 'Zvuk: ne';
+      tlZvuk.userData.kresli();
       popisRezimu();
       kresliHlavicku();
     }
 
-    const tlVyroba = vytvorTlacitko('Výroba nástrojů', '', 0.54, 0.06, () => {
+    const tlVyroba = vytvorTlacitko('Výroba', '', 0.17, 0.06, () => {
       pohled = pohled === 'vyroba' ? 'batoh' : 'vyroba';
+      stranka = 0;
       prekresli();
-    }, { pismo: 38, naStred: true });
-    tlVyroba.position.set(0, -0.06, 0);
+    }, { pismo: 60, naStred: true });
+    tlVyroba.position.set(-0.185, -0.06, 0);
+    const tlDilna = vytvorTlacitko('Dílna', '', 0.17, 0.06, () => {
+      if (renderer.xr.isPresenting) { ukazZpravu('Dílna je na počítači. Co tam navrhneš, uvidíš i v brýlích.', false); return; }
+      otevriDilnuHry();
+    }, { pismo: 64, naStred: true });
+    tlDilna.position.set(0, -0.06, 0);
+    const tlZvuk = vytvorTlacitko('', '', 0.17, 0.06, () => {
+      zvuky.nastavZapnuto(!zvuky.jeZapnuto());
+      zvuky.odemkni(); zvuky.klik();
+      prekresli(); uloz();
+    }, { pismo: 60, naStred: true });
+    tlZvuk.position.set(0.185, -0.06, 0);
     const tlRezim = vytvorTlacitko('', '', 0.54, 0.1, () => {
       if (rezim === 'uvnitr') { nastavRezim('stul'); return; }
       if (renderer.xr.isPresenting || ovladani === 'pc') vstup();
@@ -522,7 +679,7 @@ export default {
     tlOvladani.position.set(-0.185, -0.235, 0);
     const tlHra = vytvorTlacitko('', '', 0.17, 0.06, () => {
       hra = hra === 'preziti' ? 'tvoreni' : 'preziti';
-      pohled = 'batoh';
+      pohled = 'batoh'; stranka = 0;
       vybranyPredmet = polozitelne()[0] ?? null;
       prekresli(); uloz();
     }, { pismo: 60, naStred: true });
@@ -538,8 +695,8 @@ export default {
       if (rezim === 'uvnitr') { najdiZem(NX / 2, NZ / 2); H.vel.set(0, 0, 0); }
     }, { pismo: 60, naStred: true });
     tlNovy.position.set(0.185, -0.235, 0);
-    paleta.add(tlVyroba, tlRezim, tlOvladani, tlHra, tlNovy);
-    const tlacitkaPalety = [...mrizka, tlVyroba, tlRezim, tlOvladani, tlHra, tlNovy];
+    paleta.add(tlVyroba, tlDilna, tlZvuk, tlRezim, tlOvladani, tlHra, tlNovy);
+    const tlacitkaPalety = [...mrizka, tlVyroba, tlDilna, tlZvuk, tlRezim, tlOvladani, tlHra, tlNovy];
     koren.add(paleta);
 
     // ---------- těžba držením spouště ----------
@@ -555,7 +712,10 @@ export default {
       let sila = 1, nastroj = null;
       if (t.nastroj) for (const [k, n] of Object.entries(NASTROJE))
         if (n.druh === t.nastroj && pocet(k) && n.sila > sila) { sila = n.sila; nastroj = n.n; }
-      if (t.nutny && !nastroj) return { nelze: true };
+      if (t.nutny && (!nastroj || sila < (t.uroven || 0))) {
+        const cim = { krumpac: 'krumpáčem', sekera: 'sekerou', lopata: 'lopatou' }[t.nastroj];
+        return { nelze: true, zprava: BL[id].n + ' jde vytěžit jen ' + (t.uroven >= 5 ? 'kamenným ' : '') + cim + '.' };
+      }
       return { cas: t.tvrdost / sila, nastroj };
     }
     function zrusTezbu() { tezba.klic = null; tezba.postup = 0; }
@@ -564,11 +724,11 @@ export default {
       const klic = h.x + ',' + h.y + ',' + h.z;
       if (tezba.klic !== klic) {
         tezba = { klic, x: h.x, y: h.y, z: h.z, postup: 0, info: casTezby(h.id) };
-        if (tezba.info?.nelze) ukazZpravu(BL[h.id].n + ' jde vytěžit jen krumpáčem.', false);
+        if (tezba.info?.nelze) ukazZpravu(tezba.info.zprava, false);
       }
       if (!tezba.info || tezba.info.nelze) return;
-      tezba.postup += dt / tezba.info.cas;
-      if ((bzuceni += dt) > 0.2) { bzuceni = 0; vibruj(gp, 0.25, 25); }
+      tezba.postup += dt * pravidla().tezba / tezba.info.cas;
+      if ((bzuceni += dt) > 0.22) { bzuceni = 0; vibruj(gp, 0.25, 25); zvuky.tezba(zvuky.materialBloku(h.id, BL)); }
       if (tezba.postup >= 1) { dokonciTezbu(h); vibruj(gp, 0.8, 70); zrusTezbu(); }
     }
     function leticiText(text, h) {
@@ -584,12 +744,61 @@ export default {
       let ziskal = t.dava;
       if (!ziskal && t.sance && Math.random() < t.sance[1]) ziskal = t.sance[0];
       vytez(h);
+      if (!ziskal) {                                   // z listí občas padne sazenice stromu
+        const druhy = dilna.stromy.filter((s) => s.listi && (BL[s.listi] ? s.listi : LISTI) === h.id);
+        if (druhy.length && Math.random() < 0.12) ziskal = druhy[Math.floor(Math.random() * druhy.length)].id;
+      }
       if (ziskal) {
         pridej(ziskal, 1);
         if (vybranyPredmet === null && BL[ziskal]) vybranyPredmet = ziskal;
         leticiText('+1 ' + nazevPredmetu(ziskal), h);
+        setTimeout(zvuky.sebrani, 120);
       }
       prekresli(); uloz();
+    }
+
+    // ---------- Dílna: otevření a použití návrhů ve hře ----------
+    let zavritDilnu = null, konec = false;
+    function otevriDilnuHry() {
+      if (zavritDilnu) return;
+      if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+      zavritDilnu = otevriDilnu({
+        dilna,
+        zakladniBloky: [KMEN, LISTI, PRKNA, KAMEN, CIHLY, SKLO, PISEK, HLINA, TRAVA].map((id) => ({ id, n: BL[id].n, barva: BL[id].barva })),
+        priZavreni: (d, { novySvet }) => { zavritDilnu = null; if (konec) return; dilna = d; aplikujDilnu(novySvet); },
+      });
+    }
+    function aplikujDilnu(novySvet) {
+      registrujVlastni();
+      if (novySvet) { seed = (Math.random() * 1e9) | 0; zmeny = new Map(); batoh = {}; generuj(); }
+      vycistiNezname();
+      postavVse();
+      postavy.rozmisti(vsechnyPostavy(), seed);
+      nastavVelikostHrace(); postavAvatar();
+      if (rezim === 'uvnitr') while (narazi() && H.pos.y < NY) H.pos.y += 1;   // větší postava se nezasekne
+      rostouci.length = 0;
+      if (!polozitelne().includes(vybranyPredmet)) vybranyPredmet = polozitelne()[0] ?? null;
+      stranka = 0;
+      if (novySvet && rezim === 'uvnitr') { najdiZem(NX / 2, NZ / 2); H.vel.set(0, 0, 0); }
+      prekresli(); uloz();
+      ukazZpravu(novySvet ? 'Nový svět s tvými návrhy je hotový!' : 'Tvoje návrhy jsou ve hře.', true);
+    }
+    // zasazená sazenice po chvíli vyroste ve strom
+    function rustSazenic() {
+      for (let i = rostouci.length - 1; i >= 0; i--) {
+        const r = rostouci[i];
+        if (cas < r.za) continue;
+        rostouci.splice(i, 1);
+        if (get(r.x, r.y, r.z) !== r.id || !BL[r.id]?.sazenice) continue;
+        const dotcene = new Set();
+        const nastav = (X, Y, Z, id) => { setRaw(X, Y, Z, id); zmeny.set(X + ',' + Y + ',' + Z, id); dotcene.add(Math.floor(X / CH) + ',' + Math.floor(Z / CH)); };
+        nastav(r.x, r.y, r.z, A);
+        strom(r.x, r.y, r.z, BL[r.id].sazenice, nastav);
+        for (const k of dotcene) { const [a, b] = k.split(',').map(Number); postavKus(a, b); }
+        leticiText('Vyrostl strom!', r);
+        zvuky.rust();
+        uloz();
+      }
     }
 
     function popisRezimu() {
@@ -638,7 +847,7 @@ export default {
       const cil = posledniMireni;
       najdiZem(cil ? cil.x : NX / 2, cil ? cil.z : NZ / 2);
       H.vel.set(0, 0, 0);
-      otoceni = 0; pc.yaw = 0; pc.pitch = -0.25;
+      otoceni = 0; pc.yaw = 0; pc.pitch = -0.25; bylUvnitr = true;
       nastavRezim('uvnitr');
       if (!renderer.xr.isPresenting) zamkniMys();
     }
@@ -701,7 +910,7 @@ export default {
       mapa.updateMatrixWorld(true);
       inv.copy(mapa.matrixWorld).invert();
       const o = o3.copy(ray.origin).applyMatrix4(inv), d = d3.copy(ray.direction).transformDirection(inv);
-      const max = rezim === 'stul' ? 220 : 7;
+      const max = rezim === 'stul' ? 220 : tretiOsoba && !renderer.xr.isPresenting ? 11 : 7;
       let x = Math.floor(o.x), y = Math.floor(o.y), z = Math.floor(o.z);
       const sx = Math.sign(d.x), sy = Math.sign(d.y), sz = Math.sign(d.z);
       const dx = Math.abs(1 / d.x), dy = Math.abs(1 / d.y), dz = Math.abs(1 / d.z);
@@ -721,6 +930,7 @@ export default {
     function vytez(h) {
       if (!h || h.id === PODLOZI) return;
       const mokro = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].some(([a, b, c]) => get(h.x + a, h.y + b, h.z + c) === VODA);
+      zvuky.rozbiti(zvuky.materialBloku(h.id, BL));
       nastavBlok(h.x, h.y, h.z, mokro && h.y <= MORE ? VODA : A);
     }
     function poloz(h) {
@@ -735,6 +945,8 @@ export default {
       const id = hra === 'tvoreni' ? (vybranyPredmet ?? PALETA[0]) : vybranyPredmet;
       if (hra === 'preziti' && (!BL[id] || pocet(id) < 1)) { ukazZpravu('Nemáš co položit. Nejdřív něco vytěž.', false); return; }
       nastavBlok(x, y, z, id);
+      zvuky.polozeni(zvuky.materialBloku(id, BL));
+      if (BL[id].sazenice) rostouci.push({ x, y, z, id, za: cas + 2.5 });
       if (hra === 'preziti') {
         pridej(id, -1);
         if (!pocet(id)) vybranyPredmet = polozitelne()[0] ?? null;
@@ -748,7 +960,41 @@ export default {
     //  E nebo Esc myš pustí, aby šlo klikat na paletu vpravo nahoře.
     const el = renderer.domElement;
     const pc = { yaw: 0, pitch: 0, klavesy: {} };
-    const OKO = 1.5;                                          // výška očí nad nohama (bloky)
+    let OKO = 1.5;                                            // výška očí nad nohama (bloky)
+    let tretiOsoba = false;                                   // V = pohled zezadu, hráč vidí svou postavu
+    function nastavVelikostHrace() {
+      const v = dilna.hrac.velikost;
+      VYSKA = 1.6 * v; SIRKA = 0.3 * Math.min(1, v); OKO = 1.5 * v;
+    }
+    nastavVelikostHrace();
+
+    // moje postava: na stole stojí tam, kde jsem byl naposledy, na PC ji vidím zezadu (klávesa V)
+    let avatar = null, bylUvnitr = false, fazeKroku = 0;
+    function postavAvatar() {
+      if (avatar) {
+        mapa.remove(avatar);
+        avatar.traverse((o) => { o.geometry?.dispose(); const m = o.material; if (m) (Array.isArray(m) ? m : [m]).forEach((x) => { x.map?.dispose(); x.dispose(); }); });
+      }
+      avatar = sestavPostavu(dilna.hrac);
+      const jmeno = stitek(dilna.hrac.n, { sirka: 0.9, pismo: 40 });
+      jmeno.position.y = avatar.userData.vyska + 0.4;
+      avatar.add(jmeno);
+      avatar.visible = false;
+      mapa.add(avatar);
+    }
+    postavAvatar();
+    function aktualizujAvatar(dt) {
+      const ukaz = (rezim === 'stul' && bylUvnitr) || (uvnitrPC() && tretiOsoba);
+      avatar.visible = ukaz;
+      if (!ukaz) return;
+      avatar.position.copy(H.pos);
+      if (uvnitrPC()) avatar.rotation.y = pc.yaw + Math.PI;
+      const rych = rezim === 'uvnitr' ? Math.hypot(H.vel.x, H.vel.z) : 0;
+      fazeKroku += dt * (4 + rych * 2);
+      const kyv = rych > 0.3 ? Math.sin(fazeKroku) * 0.6 : 0;
+      const { nohy, ruce } = avatar.userData;
+      nohy[0].rotation.x = kyv; nohy[1].rotation.x = -kyv; ruce[0].rotation.x = -kyv; ruce[1].rotation.x = kyv;
+    }
     let stisk = null, mysXY = null, mysDrzi = false, zamceno = false;
     // zamekSelhal: poslední pokus o zamčení myši nevyšel (např. hned po Esc nebo ho prohlížeč nepovolí).
     // Pak se dá rozhlížet táhnutím a bloky těžit podržením tlačítka přímo na nich; další klik zkusí zamknout znovu.
@@ -765,6 +1011,7 @@ export default {
       pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - dy * citlivost));
     };
     const priDolu = (e) => {
+      zvuky.odemkni();
       if (uvnitrPC() && zamceno) {                            // zamčená myš: míří se křížkem uprostřed
         stisk = { b: e.button, zamceno: true };
         mysDrzi = e.button === 0;
@@ -797,21 +1044,25 @@ export default {
     };
     // rozhlížení: se zamčenou myší stačí pohyb, jinak táhnutí se stisknutým tlačítkem
     const priPohybuMysi = (e) => {
-      if (zamceno) { otocPohled(e.movementX || 0, e.movementY || 0, 0.0022); return; }
-      if (uvnitrPC() && stisk && e.buttons) otocPohled(e.movementX || 0, e.movementY || 0, 0.004);
+      if (zamceno) otocPohled(e.movementX || 0, e.movementY || 0, 0.0022);
     };
     const priPohybu = (e) => {
       if (zamceno) return;
+      // táhnutí uvnitř světa: pohyb se počítá z posunu kurzoru (spolehlivé ve všech prohlížečích)
+      if (uvnitrPC() && stisk && e.buttons && mysXY) otocPohled(e.clientX - mysXY[0], e.clientY - mysXY[1], 0.004);
       mysXY = [e.clientX, e.clientY];
       if (stisk && Math.hypot(e.clientX - stisk.x, e.clientY - stisk.y) > 5) mysDrzi = false;   // otáčí pohledem
     };
     const priKlavese = (e) => {
+      zvuky.odemkni();
       pc.klavesy[e.code] = true;
       const n = +e.key, s = polozitelne();
       if (n >= 1 && n <= 9 && s[n - 1] !== undefined) vyber(s[n - 1]);
       if (!uvnitrPC()) return;
       if (e.code === 'Space') e.preventDefault();
       if (e.code === 'KeyE') { if (zamceno) document.exitPointerLock(); else zamkniMys(); }
+      if (e.code === 'KeyV') tretiOsoba = !tretiOsoba;
+      if (e.code === 'KeyM') { zvuky.nastavZapnuto(!zvuky.jeZapnuto()); prekresli(); uloz(); }
     };
     const priPusteniKlavesy = (e) => { pc.klavesy[e.code] = false; };
     const priZtrateFokusu = () => { pc.klavesy = {}; mysDrzi = false; };
@@ -850,10 +1101,10 @@ export default {
       if (!ukaz) return;
       const t = zamceno
         ? 'WASD chůze · mezerník skok · Shift běh · ' + (hra === 'preziti' ? 'drž levé tlačítko = těžit' : 'levé tlačítko = těžit') +
-          ' · pravé = položit · 1–9 / kolečko = blok · E = batoh a výroba'
+          ' · pravé = položit · 1–9 / kolečko = blok · E = batoh a výroba · V = vidím se'
         : zamekSelhal
           ? 'Myš se nepodařilo zamknout, klikni do světa znovu. Zatím: táhni myší = rozhlížení · WASD chůze · ' +
-            (hra === 'preziti' ? 'podrž levé tlačítko na bloku = těžit' : 'podrž levé tlačítko na bloku = těžit') + ' · pravé = položit'
+            'podrž levé tlačítko na bloku = těžit · pravé = položit · V = vidím se'
           : 'Klikni do světa a otáčej se myší. Táhnutím se rozhlížíš i teď. Batoh a výroba jsou na panelu vpravo nahoře.';
       if (t !== hudText) { hudText = t; hudRada.textContent = t; }
     }
@@ -869,14 +1120,22 @@ export default {
         if (k.KeyD || k.ArrowRight) { mx -= fz; mz += fx; }
       }
       const delka = Math.hypot(mx, mz);
-      const rychlost = RYCHLOST * (k.ShiftLeft || k.ShiftRight ? 1.7 : 1);
+      const rychlost = pravidla().rychlost * (k.ShiftLeft || k.ShiftRight ? 1.7 : 1);
       if (delka) pohyb.set(mx / delka * rychlost, 0, mz / delka * rychlost); else pohyb.set(0, 0, 0);
-      if (ovlada && k.Space && H.zem) H.vel.y = SKOK;
+      if (ovlada && k.Space && H.zem) { H.vel.y = pravidla().skok; zvuky.skok(); }
       // kamera stojí v očích hráče, orbit jen otočí pohled k bodu před ním
-      camera.position.set(0, OKO, 0);
       const cp = Math.cos(pc.pitch);
-      app.orbit?.target.set(-Math.sin(pc.yaw) * cp, OKO + Math.sin(pc.pitch), -Math.cos(pc.yaw) * cp);
-      if (!app.orbit) camera.lookAt(-Math.sin(pc.yaw) * cp, OKO + Math.sin(pc.pitch), -Math.cos(pc.yaw) * cp);
+      const smer = new THREE.Vector3(-Math.sin(pc.yaw) * cp, Math.sin(pc.pitch), -Math.cos(pc.yaw) * cp);
+      if (tretiOsoba) {                                        // kamera 4 bloky za hlavou, dívá se na postavu
+        const hlavaHrace = new THREE.Vector3(0, OKO + 0.3, 0);
+        camera.position.copy(hlavaHrace).addScaledVector(smer, -4);
+        app.orbit?.target.copy(hlavaHrace);
+        if (!app.orbit) camera.lookAt(hlavaHrace);
+      } else {
+        camera.position.set(0, OKO, 0);
+        app.orbit?.target.set(smer.x, OKO + smer.y, smer.z);
+        if (!app.orbit) camera.lookAt(smer.x, OKO + smer.y, smer.z);
+      }
     }
 
     // ---------- VR: ztmavení okrajů při chůzi (proti nevolnosti) ----------
@@ -922,7 +1181,7 @@ export default {
             camera.getWorldDirection(vpred); vpred.y = 0; vpred.normalize();
             vpravo.set(-vpred.z, 0, vpred.x);
             pohyb.copy(vpred).multiplyScalar(-osaY).addScaledVector(vpravo, osaX).applyAxisAngle(OSA_Y, -otoceni);
-            const k = RYCHLOST * Math.min(1, Math.hypot(osaX, osaY));
+            const k = pravidla().rychlost * Math.min(1, Math.hypot(osaX, osaY));
             if (pohyb.lengthSq() > 0) pohyb.normalize().multiplyScalar(k);
             jdu = Math.hypot(osaX, osaY);
           } else if (rezim === 'uvnitr') pohyb.set(0, 0, 0);
@@ -934,12 +1193,13 @@ export default {
             else { otoceniStolu -= doStran * OTOCENI; svet.rotation.y = otoceniStolu; }
           }
           if (doStran === 0) { drzeno.set('otoc1', false); drzeno.set('otoc-1', false); }
-          if (rezim === 'uvnitr' && osaY < -0.7 && H.zem) H.vel.y = SKOK;
+          if (rezim === 'uvnitr' && osaY < -0.7 && H.zem) { H.vel.y = pravidla().skok; zvuky.skok(); }
         }
       }
       return jdu;
     }
 
+    let krokuUjito = 0;
     function fyzika(dt) {
       const voda = get(Math.floor(H.pos.x), Math.floor(H.pos.y + .4), Math.floor(H.pos.z)) === VODA;
       const k = voda ? 0.55 : 1;
@@ -947,11 +1207,23 @@ export default {
       H.vel.x += (pohyb.x * k - H.vel.x) * zrychleni;
       H.vel.z += (pohyb.z * k - H.vel.z) * zrychleni;
       if (voda) { H.vel.y -= 6 * dt; H.vel.y = Math.max(H.vel.y, -2.5); }
-      else { H.vel.y -= GRAVITACE * dt; H.vel.y = Math.max(H.vel.y, -30); }
+      else { H.vel.y -= pravidla().gravitace * dt; H.vel.y = Math.max(H.vel.y, -30); }
+      const predX = H.pos.x, predZ = H.pos.z, padani = H.vel.y;
       posunVodorovne('x', H.vel.x * dt);
       posunVodorovne('z', H.vel.z * dt);
       H.zem = false;
-      if (posunOsa('y', H.vel.y * dt)) { if (H.vel.y < 0) H.zem = true; H.vel.y = 0; }
+      if (posunOsa('y', H.vel.y * dt)) {
+        if (H.vel.y < 0) { H.zem = true; if (padani < -9) zvuky.dopad(); }
+        H.vel.y = 0;
+      }
+      // kroky podle toho, po čem se jde
+      if (H.zem) {
+        krokuUjito += Math.hypot(H.pos.x - predX, H.pos.z - predZ);
+        if (krokuUjito > 1.6) {
+          krokuUjito = 0;
+          zvuky.krok(zvuky.materialBloku(get(Math.floor(H.pos.x), Math.floor(H.pos.y - 0.1), Math.floor(H.pos.z)), BL));
+        }
+      }
       if (H.pos.y < -5) najdiZem(NX / 2, NZ / 2);
     }
 
@@ -1004,6 +1276,7 @@ export default {
           bylVR = vVR;
           if (vVR) {                                     // nasazené brýle = vždy ovládání VR
             ovladani = 'vr';
+            zvuky.odemkni();
             if (document.pointerLockElement === el) document.exitPointerLock();
             if (app.orbit) app.orbit.enabled = true;
           } else if (rezim === 'uvnitr') nastavRezim('stul');
@@ -1020,6 +1293,12 @@ export default {
         }
         umistiPaletu(vVR);
         aktualizujHud();
+        rustSazenic();
+        aktualizujAvatar(dt);
+        // postavičky: uvnitř světa reagují na hráče, na stole na místo, kam se ukazuje
+        const kdeHrac = rezim === 'uvnitr' ? { x: H.pos.x, y: H.pos.y, z: H.pos.z }
+          : posledniMireni ? { x: posledniMireni.x + .5, y: posledniMireni.y + 1, z: posledniMireni.z + .5 } : null;
+        postavy.aktualizuj(dt, kdeHrac, pravidla().gravitace);
 
         // ztmavení okrajů jen při chůzi v brýlích
         const cil = vVR && rezim === 'uvnitr' ? Math.min(0.85, jdu * 0.85) : 0;
@@ -1081,6 +1360,8 @@ export default {
       },
 
       zrus() {
+        konec = true;
+        zavritDilnu?.();
         el.removeEventListener('pointerdown', priDolu);
         el.removeEventListener('pointerup', priNahoru);
         document.removeEventListener('pointermove', priPohybu);
